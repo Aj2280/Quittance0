@@ -9,9 +9,9 @@ import { InvoiceService } from '../src/services/invoice.service.ts';
 import memoryStorage from '../src/storage/memory-storage.ts';
 import type { InvoiceStorage } from '../src/storage/invoice-storage.ts';
 
-const SELLER_A = 'G' + 'A'.repeat(55);
-const SELLER_B = 'G' + 'B'.repeat(55);
-const PAYER = 'G' + 'C'.repeat(55);
+const SELLER_A = 'GB3Q3VRHH3OQDYITTLONDLEHWQGKB27T2BEDSFHIUMOERULVXPDXRKG4';
+const SELLER_B = 'GB6IHEZ4QNOHJZRYRFLOC45P4SK3KKL6KNPI5WEG6FNVSZ2K5FS2MNY7';
+const PAYER = 'GCBIBQVH2B3STCBIYSMTQH6DWKSB2XUGLXH7RGPIN3OXPCFCIQEICVZ6';
 const TX_HASH = 'a'.repeat(64);
 
 interface FakeResponse {

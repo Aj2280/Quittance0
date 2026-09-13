@@ -18,54 +18,20 @@ import {
 } from '../utils/asset-helpers';
 import { amountsMatch as stroopAmountsMatch } from '../utils/verify-amount-tolerance';
 
-export type VerificationCode =
-  | 'MISSING_TX_HASH'
-  | 'INVALID_TX_HASH'
-  | 'INVALID_PAYER_NAME'
-  | 'INVALID_PAYER_EMAIL'
-  | 'PAYER_INFO_TOO_LONG'
-  | 'INVOICE_ALREADY_PAID'
-  | 'INVOICE_EXPIRED'
-  | 'INVOICE_NOT_PENDING'
-  | 'TRANSACTION_NOT_FOUND'
-  | 'NO_PAYMENT_OPERATION'
-  | 'MEMO_MISMATCH'
-  | 'DESTINATION_MISMATCH'
-  | 'AMOUNT_MISMATCH'
-  | 'ASSET_MISMATCH'
-  | 'NETWORK_MISMATCH'
-  /** Issue #379: the transaction already settled a different invoice. */
-  | 'TX_HASH_ALREADY_USED';
-
-/** User-facing message for every rejection code. Mirrored in `frontend/lib/verification.js`. */
-export const VERIFICATION_MESSAGES: Record<VerificationCode, string> = {
-  MISSING_TX_HASH: 'Transaction hash is required',
-  INVALID_TX_HASH: 'Transaction hash must be 64 hexadecimal characters',
-  INVALID_PAYER_NAME: 'Payer name must be text',
-  INVALID_PAYER_EMAIL: 'Payer email is invalid',
-  PAYER_INFO_TOO_LONG: 'Payer information is too long',
-  INVOICE_ALREADY_PAID: 'Invoice has already been paid',
-  INVOICE_EXPIRED: 'Invoice has expired and can no longer accept payment',
-  INVOICE_NOT_PENDING: 'Invoice is not pending',
-  TRANSACTION_NOT_FOUND: 'Transaction not found on Stellar',
-  NO_PAYMENT_OPERATION: 'No payment operation found in transaction',
-  MEMO_MISMATCH: 'Memo mismatch',
-  DESTINATION_MISMATCH: 'Payment destination mismatch',
-  AMOUNT_MISMATCH: 'Amount mismatch',
-  ASSET_MISMATCH: 'Asset mismatch',
-  NETWORK_MISMATCH: 'Transaction is on a different Stellar network',
-  TX_HASH_ALREADY_USED: 'Transaction already settled another invoice',
-};
-
-/** The stable set of rejection codes, in declaration order. */
-export const VERIFICATION_CODES: VerificationCode[] = Object.keys(
-  VERIFICATION_MESSAGES
-) as VerificationCode[];
-
-/** The canonical user-facing message for a rejection code. */
-export function messageForCode(code: VerificationCode): string {
-  return VERIFICATION_MESSAGES[code];
-}
+import {
+  messageForCode,
+  VERIFICATION_CODES,
+  VERIFICATION_MESSAGES,
+} from '../../../shared/verification';
+import type { VerificationCode } from '../../../shared/verification';
+export type { VerificationCode, VerificationFailureBody } from '../../../shared/verification';
+export {
+  VERIFICATION_CHECKS,
+  CHECK_REJECTION_CODES,
+  VERIFICATION_MESSAGES,
+  VERIFICATION_CODES,
+  messageForCode,
+} from '../../../shared/verification';
 
 export interface VerificationFailure {
   ok: false;

@@ -133,18 +133,30 @@ An empty database is valid. No seed is required for readiness or boot.
 
 ## Snapshot import
 
-The implementation PR should add a one-shot export/import tool with these
-properties:
+The cutover engine (`backend/src/services/cutover.service.ts` and CLI `backend/scripts/cutover.ts`) satisfies these properties:
 
-1. Put the memory API in read-only drain mode.
-2. Export one versioned JSON document from the live process.
-3. Record the count and SHA-256 digest.
-4. In one Postgres transaction, insert every row with its original values.
-5. Reject unknown fields, invalid UUIDs, duplicate IDs/memos, malformed asset
-   identities, and PAID rows without a transaction hash and paid timestamp.
-6. Compare source and target counts and per-row canonical digests.
-7. Exercise a sample of pending, expired, cancelled, and paid public links.
-8. Keep the old process running read-only until the new deployment passes.
+1. **Drain Mode**: Set `CUTOVER_DRAIN_MODE=true` in environment. New invoice creations, cancellations, and payment simulations return `503 Service Unavailable`, while public pay links (`GET /pay/:id`, `GET /api/invoices/:id`) and proof downloads remain operational.
+2. **Canonical Snapshot Export**: Exports in-memory invoices into a versioned JSON snapshot (`CutoverSnapshot` version `1.0`) with metadata (`exportedAt`, `source`, `count`, `checksum`). The SHA-256 checksum is computed over deterministically sorted invoices.
+3. **Strict Validation**: Validates UUID v4 formatting (`isValidPublicInvoiceId`), Stellar StrKey public keys (`Keypair.fromPublicKey`), positive amounts, non-XLM asset issuer requirements, duplicate ID/memo collision detection, and PAID completeness invariants (`paymentTxHash` and `paidAt`).
+4. **Transactional PostgreSQL Import**: Wraps import in `BEGIN ... COMMIT/ROLLBACK`. Checks for pre-existing database collisions on UUID or memo. Inserts invoices verbatim, and generates transaction and payment event records for paid invoices.
+5. **Dry-Run Support**: Validates and executes full transaction against the target database, asserting zero collisions, and executes `ROLLBACK` to guarantee zero state modification.
+6. **Parity Verification**: Compares source and target stores across ID, memo, seller key, amount, asset code, issuer, status, and payment hash.
+
+### CLI Usage (`npm run cutover`)
+
+```bash
+# 1. Export in-memory invoices to canonical JSON snapshot
+npm run cutover -- --export ./cutover-snapshot.json
+
+# 2. Dry-run snapshot import (validates and rolls back transaction)
+npm run cutover -- --import ./cutover-snapshot.json --dry-run
+
+# 3. Atomically import into PostgreSQL
+npm run cutover -- --import ./cutover-snapshot.json
+
+# 4. Verify post-import byte-for-byte parity
+npm run cutover -- --verify ./cutover-snapshot.json
+```
 
 No live request writes to both systems. The read-only window is the only planned
 write outage.

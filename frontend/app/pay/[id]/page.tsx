@@ -14,7 +14,9 @@ import QRCodeDisplay from '@/components/QRCodeDisplay';
 import PaymentButton from '@/components/PaymentButton';
 import WalletConnect from '@/components/WalletConnect';
 import FreighterInstallPrompt from '@/components/FreighterInstallPrompt';
+import MobilePaymentFallback from '@/components/MobilePaymentFallback';
 import ApiErrorState from '@/components/ApiErrorState';
+import { detectDeviceContext } from '@/lib/mobile-detection';
 import { copyToClipboard, formatAmount } from '@/lib/utils';
 import { openInvoicePDF, shareInvoiceByEmail } from '@/lib/export';
 import { getPayPageView, getPayPageWalletGate } from '@/lib/payment-page-state';
@@ -30,6 +32,7 @@ export default function PaymentPage() {
   const id = useParams().id as string;
   const page = usePaymentPage(id);
   const walletSession = useWalletStore();
+  const deviceContext = detectDeviceContext();
 
   if (page.loading) {
     return (
@@ -204,6 +207,20 @@ export default function PaymentPage() {
                       Scan with your Stellar wallet app to pay instantly
                     </p>
                   </section>
+
+                  {/* Mobile Payment Fallback - shown only on mobile devices */}
+                  {deviceContext.isMobile && (
+                    <MobilePaymentFallback
+                      destination={invoice.sellerPublicKey}
+                      amount={invoice.amount.toString()}
+                      memo={invoice.memo}
+                      assetCode={invoice.assetCode}
+                      assetIssuer={invoice.assetIssuer}
+                      paymentUrl={`${page.wallet?.origin || 'https://quittance.app'}/pay/${invoice.id}`}
+                      stellarUri={page.paymentInfo?.stellarQrCode || ''}
+                    />
+                  )}
+
                   <section aria-labelledby="wallet-pay-title" className="card">
                     <h3 id="wallet-pay-title" className="text-xl font-semibold text-center mb-4">
                       Pay with Wallet

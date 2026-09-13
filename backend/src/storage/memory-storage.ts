@@ -10,6 +10,14 @@ import {
 import type { PaymentClaim } from '../domain/payment-attribution';
 import type { StoredInvoice } from './invoice-storage';
 
+export interface MemoryPaymentEvent {
+  id: string;
+  invoiceId: string;
+  eventType: string;
+  eventData: any;
+  createdAt: Date;
+}
+
 type Invoice = StoredInvoice;
 
 class MemoryStorage {
@@ -17,6 +25,7 @@ class MemoryStorage {
   private invoicesByMemo: Map<string, string> = new Map(); // memo -> invoice id
   // Which invoice each transaction hash settled; see domain/payment-attribution.ts.
   private readonly paymentClaims = new PaymentClaimIndex();
+  private paymentEvents: MemoryPaymentEvent[] = [];
 
   createInvoice(data: Partial<Invoice>): Invoice {
     const invoice: Invoice = {
@@ -166,16 +175,45 @@ class MemoryStorage {
     return count;
   }
 
+  /**
+   * Records a payment lifecycle audit event in memory.
+   */
+  logPaymentEvent(invoiceId: string, eventType: string, eventData: any): void {
+    this.paymentEvents.push({
+      id: uuidv4(),
+      invoiceId,
+      eventType,
+      eventData,
+      createdAt: new Date(),
+    });
+  }
+
+  /**
+   * Retrieves payment audit events, optionally filtered by invoice ID.
+   */
+  getPaymentEvents(invoiceId?: string): MemoryPaymentEvent[] {
+    if (invoiceId) {
+      return this.paymentEvents.filter((event) => event.invoiceId === invoiceId);
+    }
+    return [...this.paymentEvents];
+  }
+
   // Clear all data (for testing)
   clear() {
     this.invoices.clear();
     this.invoicesByMemo.clear();
     this.paymentClaims.clear();
+    this.paymentEvents = [];
     console.log('🗑️ Memory storage cleared');
   }
 
   // Get size
   size(): number {
+    return this.invoices.size;
+  }
+
+  // Get invoice count for ceiling enforcement
+  getInvoiceCount(): number {
     return this.invoices.size;
   }
 }

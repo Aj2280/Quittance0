@@ -294,6 +294,15 @@ export class InvoiceService {
   }
 
   /**
+   * Get total invoice count (for ceiling enforcement)
+   */
+  async getInvoiceCount(): Promise<number> {
+    const query = 'SELECT COUNT(*) as count FROM invoices';
+    const result = await this.db.query(query);
+    return parseInt(result.rows[0].count, 10);
+  }
+
+  /**
    * Map an aggregate row to stats. Postgres returns COUNT/SUM as strings, so the
    * numbers are normalised to match the in-memory backend.
    */

@@ -5,14 +5,30 @@
 // integration harness (see invoice-payment-loop.test.ts) can drive either.
 import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import path from 'path';
 import dotenv from 'dotenv';
 import { createInvoiceRouter } from './routes/invoice.routes';
 import memoryInvoiceStorage from './storage/memory-invoice-storage';
+import invoiceMemoryService from './services/invoice-memory.service';
+import paymentMonitorService from './services/payment-monitor.service';
+import { createPaymentMonitorRouter } from './routes/payment-monitor.routes';
+import { FilePaymentMonitorCheckpointStore } from './services/payment-monitor-checkpoint';
+import { SELLER_PUBLIC_KEY } from './config/stellar';
 import { configuredFrontendOrigins, corsOptions } from './config/runtime';
 import { healthHandler, readinessHandler } from './health';
+import bodyLimitMiddleware from './middleware/body-limit';
 
-// Load environment variables
 dotenv.config();
+
+paymentMonitorService.configure({
+  invoices: invoiceMemoryService,
+  database: undefined,
+  checkpoints: new FilePaymentMonitorCheckpointStore(
+    process.env.PAYMENT_MONITOR_CURSOR_FILE
+      ? path.resolve(process.env.PAYMENT_MONITOR_CURSOR_FILE)
+      : path.resolve('data/payment-monitor-checkpoint.json')
+  ),
+});
 
 const app: Application = express();
 const PORT = process.env.PORT || 3001;
@@ -20,8 +36,11 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors(corsOptions()));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Body size enforcement (before json parser)
+app.use(bodyLimitMiddleware);
+
+app.use(express.json({ limit: '16kb' }));
+app.use(express.urlencoded({ extended: true, limit: '16kb' }));
 
 // Request logging
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -44,8 +63,8 @@ app.get('/', (req: Request, res: Response) => {
 app.get('/api/health', healthHandler(memoryInvoiceStorage.mode));
 app.get('/api/ready', readinessHandler(memoryInvoiceStorage.mode));
 
-// Invoice routes — same handlers the Postgres server uses, backed by in-memory storage
 app.use('/api', createInvoiceRouter({ storage: memoryInvoiceStorage }));
+app.use('/api', createPaymentMonitorRouter(paymentMonitorService));
 
 // Mock Stellar endpoint (MVP only)
 app.get('/api/stellar/account', (req: Request, res: Response) => {
@@ -91,6 +110,14 @@ app.use((req: Request, res: Response) => {
  * configured one, and so importing this module never starts a server.
  */
 export function startServer(port: number | string = PORT) {
+  if (SELLER_PUBLIC_KEY) {
+    try {
+      paymentMonitorService.start();
+    } catch (error) {
+      console.warn('Payment monitor not started:', error);
+    }
+  }
+
   return app.listen(port, () => {
     console.log('\n🚀 Quittance Backend (MVP Mode)');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -104,11 +131,19 @@ export function startServer(port: number | string = PORT) {
   });
 }
 
-// Only listen when this file is the process entry point. Importing it — which
-// the integration tests do — must not bind a port.
 const entryPoint = process.argv[1] ?? '';
 if (/server-mvp(\.[cm]?[jt]s)?$/.test(entryPoint)) {
   startServer();
 }
+
+process.on('SIGTERM', () => {
+  paymentMonitorService.stop();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  paymentMonitorService.stop();
+  process.exit(0);
+});
 
 export default app;
