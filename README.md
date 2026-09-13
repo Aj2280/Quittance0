@@ -411,6 +411,8 @@ A Stellar asset is the pair `(code, issuer)`, never the code alone — anyone ca
 issue a credit asset coded `USDC`, or even `XLM`. How invoices name assets and
 how settlement compares them is documented in
 [`docs/ASSETS.md`](./docs/ASSETS.md) and [`docs/VERIFY.md`](./docs/VERIFY.md).
+The current SEP-0007 field map, wallet test vectors, memo byte limit, and
+Testnet recommendation are in [`docs/SEP_0007_QR.md`](./docs/SEP_0007_QR.md).
 
 ## Tests & CI
 
