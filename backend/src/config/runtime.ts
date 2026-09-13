@@ -91,3 +91,16 @@ export function corsOptions(env: RuntimeEnvironment = process.env): CorsOptions 
     },
   };
 }
+
+export function cutoverDrainMode(env: RuntimeEnvironment = process.env): boolean {
+  return env.CUTOVER_DRAIN_MODE === 'true' || env.DRAIN_MODE === 'true';
+}
+
+export function configuredStorageMode(
+  env: RuntimeEnvironment = process.env
+): 'memory' | 'postgres' {
+  if (env.INVOICE_STORAGE === 'memory' || env.INVOICE_STORAGE === 'postgres') {
+    return env.INVOICE_STORAGE;
+  }
+  return env.DATABASE_URL ? 'postgres' : 'memory';
+}

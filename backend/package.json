@@ -19,6 +19,7 @@
     "evidence:smoke": "node scripts/evidence-smoke.mjs",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
+    "cutover": "tsx scripts/cutover.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
