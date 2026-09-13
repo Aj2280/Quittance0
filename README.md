@@ -126,6 +126,11 @@ invoices to `EXPIRED` before get, list, stats, verify, cancel, or monitor work.
 Expired invoices remain visible in seller history, but they are excluded from
 pending/actionable counts and cannot expose QR, pay, verify, or payment-proof
 controls. The client also projects stale pending data through `expiresAt` so a
+cached invoice stops offering payment after its deadline.
+
+The policy for exact payments that land across an expiry or cancellation
+boundary is documented in [`docs/LATE_PAYMENT_POLICY.md`](./docs/LATE_PAYMENT_POLICY.md).
+
 ### Multi-Asset (XLM & USDC) Support
 
 Quittance supports multi-asset invoicing across native XLM and credit assets such as USDC on Stellar:
@@ -168,6 +173,10 @@ server.ts ─────┘                                    └─ postgres-
 - `src/types/api.ts` — the shared `ApiResponse` envelope (`{ success, data, message?, pagination? }` or `{ success: false, error }`) used by every route on both servers.
 
 A bug fix in a handler applies to both servers at once.
+
+The event taxonomy, correlation rules, redacted JSON examples, and PaaS metric
+queries for this request path are defined in
+[`docs/STRUCTURED_LOGGING.md`](./docs/STRUCTURED_LOGGING.md).
 
 ---
 
@@ -251,6 +260,9 @@ Use this path when invoices must survive a backend restart. Identity is still th
 connected Freighter wallet: every invoice is stored under its `seller_public_key`,
 and list/stats endpoints only return the requesting wallet's invoices.
 
+For a live move from the MVP without changing existing `/pay/[id]` links or
+payment proofs, follow the [in-memory to Postgres cutover plan](./docs/POSTGRES_CUTOVER.md).
+
 ### 1) Point the backend at a database
 
 In `backend/.env` (template: `backend/env.example.txt`):
@@ -262,6 +274,10 @@ DATABASE_URL=postgresql://user:password@localhost:5432/quittance
 `SELLER_PUBLIC_KEY` / `SELLER_SECRET_KEY` are **optional**. They are only used by
 the single-account Horizon payment monitor; without them the server starts in
 wallet-scoped mode and the monitor stays off.
+
+The monitor polls from a durable Horizon paging token and resumes after
+restarts. Its recovery model, failure matrix, operator endpoint, and Testnet
+restart evidence are documented in [`docs/PAYMENT_MONITOR.md`](./docs/PAYMENT_MONITOR.md).
 
 ### 2) Migrate and seed
 
@@ -404,6 +420,8 @@ A Stellar asset is the pair `(code, issuer)`, never the code alone — anyone ca
 issue a credit asset coded `USDC`, or even `XLM`. How invoices name assets and
 how settlement compares them is documented in
 [`docs/ASSETS.md`](./docs/ASSETS.md) and [`docs/VERIFY.md`](./docs/VERIFY.md).
+The current SEP-0007 field map, wallet test vectors, memo byte limit, and
+Testnet recommendation are in [`docs/SEP_0007_QR.md`](./docs/SEP_0007_QR.md).
 
 ## Tests & CI
 
@@ -471,6 +489,10 @@ For a manual testnet pass with a real Freighter payment, see
 ## Demo & evidence
 
 Reviewer pack: **[`EVIDENCE.md`](./EVIDENCE.md)** (URLs, testnet tx hashes, recording, tech note).
+
+After deployment, `cd backend && npm run evidence:smoke -- --write-evidence`
+runs the real Testnet create → pay → verify path and fills the reviewer tables;
+the required secret and public variables are listed in `EVIDENCE.md`.
 
 | Item | Status |
 |------|--------|

@@ -64,6 +64,18 @@ CREATE TABLE IF NOT EXISTS payment_events (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- The Horizon paging token is committed after each operation is handled. A
+-- restart therefore resumes after the last completed operation; replay after
+-- a crash is safe because invoice settlement and tx_hash are idempotent.
+CREATE TABLE IF NOT EXISTS payment_monitor_checkpoints (
+  account VARCHAR(56) NOT NULL,
+  network VARCHAR(20) NOT NULL,
+  cursor TEXT NOT NULL,
+  ledger BIGINT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (account, network)
+);
+
 -- Wallet alignment: databases created before wallet-scoped sellers still have
 -- the unused users table and invoices.user_id column. Both are dropped here so
 -- re-running the migration converges on the wallet-only schema.

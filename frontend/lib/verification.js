@@ -1,10 +1,13 @@
 /**
- * Client mirror of the canonical verification contract (issue #224).
+ * Client side of the canonical verification contract.
  *
- * The authority is `backend/src/services/payment-verification.ts`; this file
- * exists so the pay flow can reject malformed input before a round trip and
- * surface the exact code/message the server would return. Keep the codes and
- * messages here identical to the backend module.
+ * The codes and messages live in shared/verification.ts, which the backend
+ * uses too. This file used to carry a hand-maintained copy of both, with a
+ * header instructing future editors to keep it identical to the backend
+ * module. That copy is gone: a backend test now fails if either side grows a
+ * local list again (issue #377). What remains here is client-only behaviour —
+ * pre-flight validation so the pay flow can reject malformed input without a
+ * round trip, and mapping a server rejection onto the same wording.
  */
 
 const { rejectionLabel: _rejectionLabel } = require('./verify-rejection-label.ts');
