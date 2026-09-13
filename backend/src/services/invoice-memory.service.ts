@@ -2,7 +2,7 @@ import { MemoCollisionError } from '../domain/payment-attribution';
 import { generateInvoiceMemo } from '../utils/memo';
 import { generatePublicInvoiceId } from '../utils/memory-public-id';
 import { CreateInvoiceInput } from '../utils/validation';
-import memoryStorage, { MemoryStorage } from '../storage/memory-storage';
+import memoryStorage, { MemoryStorage, MemoryPaymentEvent } from '../storage/memory-storage';
 import { calculateInvoiceExpiry } from '../domain/invoice-expiry';
 import type { StoredInvoice } from '../storage/invoice-storage';
 import type { InvoiceStats } from '../storage/invoice-stats';
@@ -141,6 +141,20 @@ export class InvoiceMemoryService {
 
   async getInvoiceStats(sellerPublicKey: string): Promise<InvoiceStats[]> {
     return [this.storage.getStats(sellerPublicKey)];
+  }
+
+  /**
+   * Logs a payment lifecycle event for audit tracking.
+   */
+  async logPaymentEvent(invoiceId: string, eventType: string, eventData: any): Promise<void> {
+    this.storage.logPaymentEvent(invoiceId, eventType, eventData);
+  }
+
+  /**
+   * Retrieves logged payment events for an invoice or all invoices.
+   */
+  async getPaymentEvents(invoiceId?: string): Promise<MemoryPaymentEvent[]> {
+    return this.storage.getPaymentEvents(invoiceId);
   }
 }
 

@@ -3,6 +3,7 @@ import stellarController from '../controllers/stellar.controller';
 import paymentMonitorService from '../services/payment-monitor.service';
 import postgresInvoiceStorage from '../storage/postgres-invoice-storage';
 import { createInvoiceRouter } from './invoice.routes';
+import { createPaymentMonitorRouter } from './payment-monitor.routes';
 import { healthHandler, readinessHandler } from '../health';
 
 const router = Router();
@@ -19,30 +20,6 @@ router.get('/stellar/account', stellarController.getAccountInfo.bind(stellarCont
 router.get('/stellar/payments', stellarController.getPayments.bind(stellarController));
 router.get('/stellar/transaction/:hash', stellarController.getTransaction.bind(stellarController));
 router.post('/stellar/verify-payment', stellarController.verifyPayment.bind(stellarController));
-
-// Payment monitoring routes
-router.post('/payment/sync', async (req, res) => {
-  try {
-    const limit = req.body.limit || 50;
-    await paymentMonitorService.manualSync(limit);
-    res.json({
-      success: true,
-      message: `Payment sync completed`,
-      limit
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Sync failed'
-    });
-  }
-});
-
-router.get('/payment/monitor/status', (_req, res) => {
-  res.json({
-    success: true,
-    data: paymentMonitorService.getStatus(),
-  });
-});
+router.use(createPaymentMonitorRouter(paymentMonitorService));
 
 export default router;
