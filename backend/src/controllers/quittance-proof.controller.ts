@@ -62,7 +62,6 @@ export async function getQuittanceProof(req: Request, res: Response): Promise<vo
 
     // Return the canonical JSON proof
     sendSuccess(res, 200, {
-      schemaVersion: proof.schemaVersion,
       ...proof,
     });
   } catch (error: any) {
