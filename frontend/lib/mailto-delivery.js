@@ -4,7 +4,7 @@
  */
 
 const { assertPaymentProofAvailable, canExportPaymentProof } = require('./payment-proof-policy.js');
-const { buildHorizonTxUrl } = require('./explorer-tx-link.js');
+const { buildHorizonTxUrl } = require('./stellar-explorer.js');
 
 // Same default as lib/stellar.ts: without NEXT_PUBLIC_STELLAR_NETWORK the app
 // talks to testnet, so explorer links must point there too.

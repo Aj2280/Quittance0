@@ -1,6 +1,10 @@
-// Implementation of the Horizon transaction explorer URL builder.
-// explorer-tx-link.ts is a thin typed wrapper around this file, so the two
-// cannot drift: the URL table and the hash validation live here only.
+// Horizon transaction explorer URL builder - the single implementation.
+//
+// explorer-tx-link.ts re-exports this so typed callers keep their import path,
+// and the mailto helpers require it directly. The module name is deliberately
+// not "explorer-tx-link.js": the shared export-test loader maps both
+// './explorer-tx-link' and './explorer-tx-link.js' to the .ts file, so an
+// implementation with that base name would shadow itself.
 
 const EXPLORER_TX_URLS = {
   public: 'https://stellar.expert/explorer/public/tx',
@@ -25,7 +29,7 @@ function buildHorizonTxUrl(txHash, network = 'public') {
   }
 
   const baseUrl = EXPLORER_TX_URLS[network] ?? EXPLORER_TX_URLS.public;
-  return `${baseUrl}/${normalizedHash}`;
+  return baseUrl + '/' + normalizedHash;
 }
 
 module.exports = { buildHorizonTxUrl };
