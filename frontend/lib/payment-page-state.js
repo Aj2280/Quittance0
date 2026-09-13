@@ -166,6 +166,13 @@ function paymentReducer(state, event) {
       if (isTerminalPayState(state.status)) return state;
       return { ...state, status: PAY_STATES.ERROR, error: event.error ?? 'Verification failed' };
 
+    // An outage is not a rejection. Return to idle so the payer keeps the
+    // verify control and the rest of the session, instead of being told the
+    // payment failed when nothing was ever rejected.
+    case 'VERIFY_UNAVAILABLE':
+      if (isTerminalPayState(state.status)) return state;
+      return { ...state, status: PAY_STATES.IDLE, error: null };
+
     case 'RESET':
       if (isTerminalPayState(state.status)) return state;
       return { ...state, status: PAY_STATES.IDLE, error: null };
