@@ -255,8 +255,9 @@ class RedisRateLimitStore {
 const memoryStore = new MemoryRateLimitStore();
 const redisStore = new RedisRateLimitStore();
 
-// Cleanup memory store every hour
-setInterval(() => memoryStore.cleanup(), 3600000);
+// Cleanup memory store every hour without keeping tests or short-lived tools alive.
+const cleanupInterval = setInterval(() => memoryStore.cleanup(), 3600000);
+cleanupInterval.unref?.();
 
 /**
  * Get client IP from request, considering X-Forwarded-For (Vercel, Render)

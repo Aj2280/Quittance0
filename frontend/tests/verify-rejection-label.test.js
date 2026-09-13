@@ -9,12 +9,12 @@ const { rejectionLabel, REJECTION_LABELS } = require('../lib/verify-rejection-la
 
 const GENERIC = 'Unknown verification error';
 
-test('REJECTION_LABELS map contains exactly the 16 keys the contract declares', () => {
+test('REJECTION_LABELS map contains exactly the contract keys and unknown sentinel', () => {
   assert.equal(typeof REJECTION_LABELS, 'object');
   assert.equal(
     Object.keys(REJECTION_LABELS).length,
-    16,
-    '15 known codes + 1 UNKNOWN_VERIFICATION_ERROR sentinel'
+    KNOWN_CODE_FIXTURES.length + 1,
+    'known codes + 1 UNKNOWN_VERIFICATION_ERROR sentinel'
   );
 });
 

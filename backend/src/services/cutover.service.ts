@@ -32,6 +32,11 @@ export interface CutoverSnapshotInvoice {
   payerEmail?: string | null;
   createdAt: string;
   paidAt?: string | null;
+  cancelledAt?: string | null;
+  settledAt?: string | null;
+  settlementContext?: 'ON_TIME' | 'AFTER_EXPIRY' | 'AFTER_CANCEL' | null;
+  priorStatus?: 'PENDING' | 'PAID' | 'EXPIRED' | 'CANCELLED' | null;
+  latePaymentWarningCode?: 'PAYMENT_RECEIVED_AFTER_EXPIRY' | 'PAYMENT_RECEIVED_AFTER_CANCEL' | null;
   expiresAt: string;
   metadata?: any;
 }
@@ -111,6 +116,11 @@ export function computeSnapshotChecksum(invoices: CutoverSnapshotInvoice[]): str
     payerEmail: inv.payerEmail ?? null,
     createdAt: inv.createdAt,
     paidAt: inv.paidAt ?? null,
+    cancelledAt: inv.cancelledAt ?? null,
+    settledAt: inv.settledAt ?? null,
+    settlementContext: inv.settlementContext ?? null,
+    priorStatus: inv.priorStatus ?? null,
+    latePaymentWarningCode: inv.latePaymentWarningCode ?? null,
     expiresAt: inv.expiresAt,
     metadata: inv.metadata ?? null,
   }));
@@ -151,6 +161,11 @@ export function exportMemorySnapshot(
     payerEmail: inv.payerEmail ?? null,
     createdAt: inv.createdAt instanceof Date ? inv.createdAt.toISOString() : new Date(inv.createdAt).toISOString(),
     paidAt: inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt.toISOString() : new Date(inv.paidAt).toISOString()) : null,
+    cancelledAt: inv.cancelledAt ? (inv.cancelledAt instanceof Date ? inv.cancelledAt.toISOString() : new Date(inv.cancelledAt).toISOString()) : null,
+    settledAt: inv.settledAt ? (inv.settledAt instanceof Date ? inv.settledAt.toISOString() : new Date(inv.settledAt).toISOString()) : null,
+    settlementContext: inv.settlementContext ?? null,
+    priorStatus: inv.priorStatus ?? null,
+    latePaymentWarningCode: inv.latePaymentWarningCode ?? null,
     expiresAt: inv.expiresAt instanceof Date ? inv.expiresAt.toISOString() : new Date(inv.expiresAt).toISOString(),
     metadata: inv.metadata ?? null,
   }));
@@ -264,6 +279,12 @@ export function validateCutoverSnapshot(snapshot: CutoverSnapshot): CutoverValid
       if (!inv.paidAt || Number.isNaN(new Date(inv.paidAt).getTime())) {
         errors.push(`${prefix} PAID invoice must have a valid paidAt timestamp`);
       }
+      if (inv.settlementContext && !['ON_TIME', 'AFTER_EXPIRY', 'AFTER_CANCEL'].includes(inv.settlementContext)) {
+        errors.push(`${prefix} settlementContext "${inv.settlementContext}" is not valid`);
+      }
+      if (inv.latePaymentWarningCode && !['PAYMENT_RECEIVED_AFTER_EXPIRY', 'PAYMENT_RECEIVED_AFTER_CANCEL'].includes(inv.latePaymentWarningCode)) {
+        errors.push(`${prefix} latePaymentWarningCode "${inv.latePaymentWarningCode}" is not valid`);
+      }
     }
 
     const createdTime = new Date(inv.createdAt).getTime();
@@ -352,12 +373,16 @@ export async function importSnapshotToPostgres(
           id, seller_public_key, seller_name, seller_email, amount,
           asset_code, asset_issuer, memo, description, customer_name,
           customer_email, status, payment_tx_hash, payer_public_key,
-          payer_name, payer_email, created_at, paid_at, expires_at, metadata
+          payer_name, payer_email, created_at, paid_at, cancelled_at,
+          settled_at, settlement_context, prior_status, late_payment_warning_code,
+          expires_at, metadata
         ) VALUES (
           $1, $2, $3, $4, $5,
           $6, $7, $8, $9, $10,
           $11, $12, $13, $14,
-          $15, $16, $17, $18, $19, $20
+          $15, $16, $17, $18, $19,
+          $20, $21, $22, $23,
+          $24, $25
         )
       `;
 
@@ -381,6 +406,11 @@ export async function importSnapshotToPostgres(
           inv.payerEmail ?? null,
           new Date(inv.createdAt),
           inv.paidAt ? new Date(inv.paidAt) : null,
+          inv.cancelledAt ? new Date(inv.cancelledAt) : null,
+          inv.settledAt ? new Date(inv.settledAt) : null,
+          inv.settlementContext ?? null,
+          inv.priorStatus ?? null,
+          inv.latePaymentWarningCode ?? null,
           new Date(inv.expiresAt),
           inv.metadata ? JSON.stringify(inv.metadata) : null,
         ]);
@@ -418,6 +448,10 @@ export async function importSnapshotToPostgres(
               payer: inv.payerPublicKey,
               amount: inv.amount,
               memo: inv.memo,
+              settledAt: inv.settledAt,
+              settlementContext: inv.settlementContext,
+              priorStatus: inv.priorStatus,
+              latePaymentWarningCode: inv.latePaymentWarningCode,
             }),
             inv.paidAt ? new Date(inv.paidAt) : new Date(),
           ]);
@@ -500,6 +534,21 @@ export async function verifyCutoverParity(
     }
     if ((sourceInv.paymentTxHash ?? null) !== (targetInv.paymentTxHash ?? null)) {
       mismatches.push(`PaymentTxHash mismatch for ${id}`);
+    }
+    if ((sourceInv.cancelledAt?.toISOString?.() ?? sourceInv.cancelledAt ?? null) !== (targetInv.cancelledAt?.toISOString?.() ?? targetInv.cancelledAt ?? null)) {
+      mismatches.push(`CancelledAt mismatch for ${id}`);
+    }
+    if ((sourceInv.settledAt?.toISOString?.() ?? sourceInv.settledAt ?? null) !== (targetInv.settledAt?.toISOString?.() ?? targetInv.settledAt ?? null)) {
+      mismatches.push(`SettledAt mismatch for ${id}`);
+    }
+    if ((sourceInv.settlementContext ?? null) !== (targetInv.settlementContext ?? null)) {
+      mismatches.push(`SettlementContext mismatch for ${id}`);
+    }
+    if ((sourceInv.priorStatus ?? null) !== (targetInv.priorStatus ?? null)) {
+      mismatches.push(`PriorStatus mismatch for ${id}`);
+    }
+    if ((sourceInv.latePaymentWarningCode ?? null) !== (targetInv.latePaymentWarningCode ?? null)) {
+      mismatches.push(`LatePaymentWarningCode mismatch for ${id}`);
     }
 
     if (

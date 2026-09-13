@@ -1,7 +1,8 @@
 # Invoice expiry, cancellation, and late on-chain payment policy
 
-Status: product decision for the freelancer MVP. Implementation changes are a
-follow-up.
+Status: product decision for the freelancer MVP. Issue #417 implements the
+cancel-versus-payment settlement slice. The broader after-expiry and extension
+behavior remains a follow-up.
 
 ## Decision
 

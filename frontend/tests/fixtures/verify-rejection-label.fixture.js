@@ -11,16 +11,19 @@ const KNOWN_CODE_FIXTURES = [
   { code: 'INVALID_PAYER_NAME', label: 'Invalid payer name' },
   { code: 'INVALID_PAYER_EMAIL', label: 'Invalid payer email' },
   { code: 'PAYER_INFO_TOO_LONG', label: 'Payer information too long' },
+  { code: 'VERIFY_RATE_LIMIT_EXCEEDED', label: 'Rate limit exceeded' },
   { code: 'INVOICE_ALREADY_PAID', label: 'Invoice already paid' },
   { code: 'INVOICE_EXPIRED', label: 'Invoice expired' },
   { code: 'INVOICE_NOT_PENDING', label: 'Invoice not pending' },
   { code: 'TRANSACTION_NOT_FOUND', label: 'Transaction not found' },
+  { code: 'TRANSACTION_CLOSE_TIME_UNAVAILABLE', label: 'Close time unavailable' },
   { code: 'NO_PAYMENT_OPERATION', label: 'No payment operation' },
   { code: 'MEMO_MISMATCH', label: 'Memo mismatch' },
   { code: 'DESTINATION_MISMATCH', label: 'Destination mismatch' },
   { code: 'AMOUNT_MISMATCH', label: 'Amount mismatch' },
   { code: 'ASSET_MISMATCH', label: 'Asset mismatch' },
   { code: 'NETWORK_MISMATCH', label: 'Network mismatch' },
+  { code: 'TX_HASH_ALREADY_USED', label: 'Transaction already used' },
 ];
 
 const UNKNOWN_CODE_FIXTURES = [

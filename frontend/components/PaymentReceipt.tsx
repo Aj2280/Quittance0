@@ -18,7 +18,24 @@ interface PaymentReceiptProps {
   invoice: PayPageInvoice;
 }
 
+function latePaymentWarning(invoice: PayPageInvoice): { title: string; body: string } | null {
+  if (invoice.latePaymentWarningCode === 'PAYMENT_RECEIVED_AFTER_CANCEL') {
+    return {
+      title: 'Payment received after cancellation',
+      body: 'This transaction proves funds reached the seller. Contact the seller to reconcile the payment.',
+    };
+  }
+  if (invoice.latePaymentWarningCode === 'PAYMENT_RECEIVED_AFTER_EXPIRY') {
+    return {
+      title: 'Payment received after invoice expiry',
+      body: 'This transaction proves funds reached the seller after the original payment window.',
+    };
+  }
+  return null;
+}
+
 export default function PaymentReceipt({ invoice }: PaymentReceiptProps) {
+  const warning = latePaymentWarning(invoice);
   const handleDownloadPDF = () => {
     openInvoicePDF(invoice as any);
     toast.success('Opening payment proof');
@@ -42,7 +59,8 @@ export default function PaymentReceipt({ invoice }: PaymentReceiptProps) {
 
 Invoice ID: ${invoice.id}
 Status: ${invoice.status}
-Payment Date: ${formatDate(invoice.paidAt || invoice.createdAt)}
+Payment Date: ${formatDate(invoice.settledAt || invoice.paidAt || invoice.createdAt)}
+${warning ? `Warning: ${warning.title}. ${warning.body}` : ''}
 
 ───────────────────────────────────────
 PAYMENT DETAILS
@@ -88,6 +106,7 @@ Stellar Blockchain Payment System
   const activeAssetCode = invoice.assetCode || 'XLM';
   const amountLabel = describeAmount(formatAmount(invoice.amount, 7), activeAssetCode);
   const canEmail = Boolean(invoice.customerEmail);
+  const proofRecipient = getProofMailtoRecipient(invoice as any);
   const emailReasonId = 'receipt-email-reason';
 
   return (
@@ -109,6 +128,13 @@ Stellar Blockchain Payment System
         </h2>
         <p className="text-green-700 font-semibold text-lg">Payment Confirmed</p>
       </div>
+
+      {warning && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+          <p className="text-sm text-amber-900 font-semibold">{warning.title}</p>
+          <p className="text-sm text-amber-800 mt-1">{warning.body}</p>
+        </div>
+      )}
 
       <div className="space-y-4 mb-6">
         {/*
@@ -152,7 +178,9 @@ Stellar Blockchain Payment System
 
           <div className="bg-gray-50 rounded-lg p-4">
             <p className="text-xs text-gray-600 mb-1">Payment Date</p>
-            <p className="text-sm text-gray-900">{formatDate(invoice.paidAt || invoice.createdAt)}</p>
+            <p className="text-sm text-gray-900">
+              {formatDate(invoice.settledAt || invoice.paidAt || invoice.createdAt)}
+            </p>
           </div>
         </div>
 

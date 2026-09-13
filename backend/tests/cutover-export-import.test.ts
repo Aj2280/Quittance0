@@ -86,8 +86,13 @@ class TransactionalFakeDb implements Queryable {
         payer_email: params[15],
         created_at: params[16] ? new Date(params[16]) : new Date(),
         paid_at: params[17] ? new Date(params[17]) : null,
-        expires_at: params[18] ? new Date(params[18]) : new Date(),
-        metadata: params[19] ? JSON.parse(params[19]) : null,
+        cancelled_at: params[18] ? new Date(params[18]) : null,
+        settled_at: params[19] ? new Date(params[19]) : null,
+        settlement_context: params[20],
+        prior_status: params[21],
+        late_payment_warning_code: params[22],
+        expires_at: params[23] ? new Date(params[23]) : new Date(),
+        metadata: params[24] ? JSON.parse(params[24]) : null,
       };
       this.rows.push(row);
       return { rows: [{ ...row }], rowCount: 1 };

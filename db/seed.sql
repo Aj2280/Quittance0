@@ -28,6 +28,11 @@ INSERT INTO invoices (
   payer_email,
   created_at,
   paid_at,
+  cancelled_at,
+  settled_at,
+  settlement_context,
+  prior_status,
+  late_payment_warning_code,
   expires_at,
   metadata
 )
@@ -51,6 +56,11 @@ VALUES
     NULL,
     NOW(),
     NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
     NOW() + INTERVAL '7 days',
     '{"source":"seed","demo":true}'::jsonb
   ),
@@ -73,6 +83,11 @@ VALUES
     'payer.b@example.com',
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '1 day',
+    NULL,
+    NOW() - INTERVAL '1 day',
+    'ON_TIME',
+    NULL,
+    NULL,
     NOW() + INTERVAL '5 days',
     '{"source":"seed","demo":true}'::jsonb
   ),
@@ -94,6 +109,11 @@ VALUES
     NULL,
     NULL,
     NOW() - INTERVAL '8 days',
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
     NULL,
     NOW() - INTERVAL '1 day',
     '{"source":"seed","demo":true,"assetIssuer":"GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"}'::jsonb
@@ -118,6 +138,11 @@ VALUES
     'payer.a@example.com',
     NOW() - INTERVAL '4 days',
     NOW() - INTERVAL '3 days',
+    NULL,
+    NOW() - INTERVAL '3 days',
+    'ON_TIME',
+    NULL,
+    NULL,
     NOW() + INTERVAL '3 days',
     '{"source":"seed","demo":true}'::jsonb
   )

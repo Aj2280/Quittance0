@@ -4,16 +4,23 @@ import { generateInvoiceMemo } from '../utils/memo';
 import { CreateInvoiceInput } from '../utils/validation';
 import type { InvoiceStats } from '../storage/invoice-stats';
 import { calculateInvoiceExpiry } from '../domain/invoice-expiry';
+import {
+  SettlementTimeUnavailableError,
+  type LatePaymentWarningCode,
+  type SettlementContext,
+} from '../domain/invoice-settlement';
+import type { MarkAsPaidOptions } from '../storage/invoice-storage';
 
 // PostgreSQL invoice service. Kept behaviourally identical to
 // InvoiceMemoryService so callers that go through the shared InvoiceStorage
 // interface cannot tell which backend is running. Invariants mirrored on both
-// sides: (1) markAsPaid only succeeds when status is PENDING AND expires_at
-// is strictly after now(), (2) cancelInvoice only succeeds when status is
-// PENDING, (3) every read path calls markExpiredInvoices first so expired
-// rows transition before being reported, (4) list + stats are scoped to the
-// caller's seller_public_key, (5) credit assets always carry their
-// asset_issuer because createInvoiceSchema already rejected anything less.
+// sides: (1) normal markAsPaid succeeds when status is PENDING AND expires_at
+// is strictly after now(), while an exact cancelled-invoice payment may settle
+// with cancellation context, (2) cancelInvoice only succeeds when status is
+// PENDING, (3) every read path calls markExpiredInvoices first so expired rows
+// transition before being reported, (4) list + stats are scoped to the caller's
+// seller_public_key, (5) credit assets always carry their asset_issuer because
+// createInvoiceSchema already rejected anything less.
 /** Minimal database surface used by this service (pg Pool or a test double). */
 export interface Queryable {
   query(text: string, params?: any[]): Promise<{ rows: any[]; rowCount?: number | null }>;
@@ -38,6 +45,11 @@ export interface Invoice {
   payerEmail?: string;
   createdAt: Date;
   paidAt?: Date;
+  cancelledAt?: Date;
+  settledAt?: Date;
+  settlementContext?: SettlementContext;
+  priorStatus?: 'PENDING' | 'PAID' | 'EXPIRED' | 'CANCELLED';
+  latePaymentWarningCode?: LatePaymentWarningCode;
   expiresAt: Date;
   metadata?: any;
 }
@@ -129,14 +141,56 @@ export class InvoiceService {
     invoiceId: string,
     txHash: string,
     payerPublicKey: string,
-    payerInfo?: { payerName?: string; payerEmail?: string }
+    payerInfo?: { payerName?: string; payerEmail?: string },
+    options?: MarkAsPaidOptions
   ): Promise<Invoice> {
+    const settledAt = options?.settledAt ?? null;
     const query = `
-      UPDATE invoices 
-      SET status = 'PAID', payment_tx_hash = $2, payer_public_key = $3, paid_at = NOW(),
-          payer_name = $4, payer_email = $5
-      WHERE id = $1 AND status = 'PENDING' AND expires_at > NOW()
-      RETURNING *
+      WITH settled AS (
+        UPDATE invoices
+        SET status = 'PAID',
+            payment_tx_hash = $2,
+            payer_public_key = $3,
+            paid_at = NOW(),
+            payer_name = $4,
+            payer_email = $5,
+            settled_at = COALESCE($6::timestamptz, NOW()),
+            settlement_context = CASE
+              WHEN status = 'CANCELLED' AND $6::timestamptz >= cancelled_at THEN 'AFTER_CANCEL'
+              ELSE 'ON_TIME'
+            END,
+            prior_status = CASE
+              WHEN status = 'CANCELLED' THEN status
+              ELSE NULL
+            END,
+            late_payment_warning_code = CASE
+              WHEN status = 'CANCELLED' AND $6::timestamptz >= cancelled_at THEN 'PAYMENT_RECEIVED_AFTER_CANCEL'
+              ELSE NULL
+            END
+        WHERE id = $1
+          AND (
+            (status = 'PENDING' AND expires_at > NOW())
+            OR (status = 'CANCELLED' AND cancelled_at IS NOT NULL AND $6::timestamptz IS NOT NULL)
+          )
+        RETURNING *
+      ),
+      payment_event AS (
+        INSERT INTO payment_events (invoice_id, event_type, event_data)
+        SELECT
+          id,
+          'PAYMENT_CONFIRMED',
+          jsonb_strip_nulls(jsonb_build_object(
+            'txHash', $2::text,
+            'payerPublicKey', $3::text,
+            'settledAt', settled_at,
+            'settlementContext', settlement_context,
+            'priorStatus', prior_status,
+            'latePaymentWarningCode', late_payment_warning_code
+          ))
+        FROM settled
+        RETURNING id
+      )
+      SELECT * FROM settled
     `;
 
     try {
@@ -146,21 +200,24 @@ export class InvoiceService {
         payerPublicKey,
         payerInfo?.payerName || null,
         payerInfo?.payerEmail || null,
+        settledAt,
       ]);
 
       if (result.rows.length === 0) {
+        const existing = await this.db.query('SELECT * FROM invoices WHERE id = $1', [invoiceId]);
+        if (existing.rows[0]?.status === 'CANCELLED' && !settledAt) {
+          throw new SettlementTimeUnavailableError();
+        }
         throw new Error('Invoice not found, expired, or already processed');
       }
 
       console.log('✅ Invoice marked as paid:', invoiceId);
 
-      await this.logPaymentEvent(invoiceId, 'PAYMENT_CONFIRMED', {
-        txHash,
-        payerPublicKey,
-      });
-
       return this.mapRowToInvoice(result.rows[0]);
     } catch (error: any) {
+      if (error instanceof SettlementTimeUnavailableError) {
+        throw error;
+      }
       console.error('Error marking invoice as paid:', error);
       throw new Error(`Failed to update invoice: ${error.message}`);
     }
@@ -202,26 +259,26 @@ export class InvoiceService {
   async cancelInvoice(invoiceId: string, sellerPublicKey?: string): Promise<Invoice> {
     await this.markExpiredInvoices();
 
-    if (sellerPublicKey) {
-      const existing = await this.db.query('SELECT * FROM invoices WHERE id = $1', [invoiceId]);
-      if (existing.rows.length === 0 || existing.rows[0].status !== 'PENDING') {
-        throw new Error('Invoice not found or already processed');
-      }
-      if (existing.rows[0].seller_public_key !== sellerPublicKey) {
-        throw new Error('Unauthorized: only the seller can cancel this invoice');
-      }
-    }
-
     const query = `
       UPDATE invoices 
-      SET status = 'CANCELLED'
-      WHERE id = $1 AND status = 'PENDING'
+      SET status = 'CANCELLED', cancelled_at = NOW()
+      WHERE id = $1 AND status = 'PENDING' AND ($2::text IS NULL OR seller_public_key = $2)
       RETURNING *
     `;
 
-    const result = await this.db.query(query, [invoiceId]);
+    const result = await this.db.query(query, [invoiceId, sellerPublicKey || null]);
 
     if (result.rows.length === 0) {
+      if (sellerPublicKey) {
+        const existing = await this.db.query('SELECT * FROM invoices WHERE id = $1', [invoiceId]);
+        if (
+          existing.rows.length > 0 &&
+          existing.rows[0].status === 'PENDING' &&
+          existing.rows[0].seller_public_key !== sellerPublicKey
+        ) {
+          throw new Error('Unauthorized: only the seller can cancel this invoice');
+        }
+      }
       throw new Error('Invoice not found or already processed');
     }
 
@@ -346,6 +403,11 @@ export class InvoiceService {
       payerEmail: row.payer_email,
       createdAt: row.created_at,
       paidAt: row.paid_at,
+      cancelledAt: row.cancelled_at,
+      settledAt: row.settled_at,
+      settlementContext: row.settlement_context,
+      priorStatus: row.prior_status,
+      latePaymentWarningCode: row.late_payment_warning_code,
       expiresAt: row.expires_at,
       metadata: row.metadata,
     };

@@ -2,13 +2,14 @@ import { v4 as uuidv4 } from 'uuid';
 import { calculateInvoiceStats } from './invoice-stats';
 import type { InvoiceStats } from './invoice-stats';
 import { isPendingInvoiceExpired } from '../domain/invoice-expiry';
+import { settlementFieldsForInvoice } from '../domain/invoice-settlement';
 import {
   MemoCollisionError,
   PaymentClaimError,
   PaymentClaimIndex,
 } from '../domain/payment-attribution';
 import type { PaymentClaim } from '../domain/payment-attribution';
-import type { StoredInvoice } from './invoice-storage';
+import type { MarkAsPaidOptions, StoredInvoice } from './invoice-storage';
 
 export interface MemoryPaymentEvent {
   id: string;
@@ -103,7 +104,7 @@ class MemoryStorage {
     if (sellerPublicKey && invoice.sellerPublicKey !== sellerPublicKey) {
       throw new Error('Unauthorized: only the seller can cancel this invoice');
     }
-    return this.updateInvoice(id, { status: 'CANCELLED' });
+    return this.updateInvoice(id, { status: 'CANCELLED', cancelledAt: new Date() });
   }
 
   // Mark as paid
@@ -111,13 +112,22 @@ class MemoryStorage {
     id: string,
     txHash: string,
     payerPublicKey: string,
-    payerInfo?: { payerName?: string; payerEmail?: string }
+    payerInfo?: { payerName?: string; payerEmail?: string },
+    options: MarkAsPaidOptions = {}
   ): Invoice | undefined {
     this.markExpiredInvoices();
     const now = new Date();
     const invoice = this.invoices.get(id);
-    if (!invoice || invoice.status !== 'PENDING') return undefined;
-    if (new Date(invoice.expiresAt).getTime() <= now.getTime()) return undefined;
+    if (!invoice || invoice.status === 'PAID') return undefined;
+    if (invoice.status === 'PENDING' && new Date(invoice.expiresAt).getTime() <= now.getTime()) {
+      return undefined;
+    }
+    if (invoice.status !== 'PENDING' && invoice.status !== 'CANCELLED') return undefined;
+
+    const settlement = settlementFieldsForInvoice(
+      invoice,
+      options.settledAt ?? (invoice.status === 'PENDING' ? now : undefined)
+    );
 
     // One transaction settles one invoice. The claim below reads and records in
     // the same synchronous step, so a second caller holding the same hash gets a
@@ -129,14 +139,32 @@ class MemoryStorage {
     }
     if (decision.kind === 'replay') return undefined;
 
-    return this.updateInvoice(id, {
+    const updated = this.updateInvoice(id, {
       status: 'PAID',
       paymentTxHash: txHash,
       payerPublicKey,
       payerName: payerInfo?.payerName,
       payerEmail: payerInfo?.payerEmail,
-      paidAt: new Date(),
+      paidAt: now,
+      cancelledAt: invoice.cancelledAt,
+      settledAt: settlement.settledAt,
+      settlementContext: settlement.settlementContext,
+      priorStatus: settlement.priorStatus,
+      latePaymentWarningCode: settlement.latePaymentWarningCode,
     });
+
+    if (updated) {
+      this.logPaymentEvent(id, 'PAYMENT_CONFIRMED', {
+        txHash,
+        payerPublicKey,
+        settledAt: settlement.settledAt.toISOString(),
+        settlementContext: settlement.settlementContext,
+        priorStatus: settlement.priorStatus,
+        latePaymentWarningCode: settlement.latePaymentWarningCode,
+      });
+    }
+
+    return updated;
   }
 
   // Get all invoices

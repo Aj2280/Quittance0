@@ -69,6 +69,7 @@ export interface QuittanceProofInput {
   expiresAt?: string | Date | null;
   createdAt?: string | Date | null;
   paidAt?: string | Date | null;
+  settledAt?: string | Date | null;
 }
 
 export interface QuittanceProofOptions {
@@ -185,7 +186,7 @@ export function buildQuittanceProof(
     txHash = candidate.toLowerCase();
   }
 
-  const checkedAt = settled ? utcIso(input.paidAt) : null;
+  const checkedAt = settled ? utcIso(input.settledAt ?? input.paidAt) : null;
   const generatedAt = (options.now ?? new Date()).toISOString();
 
   const proof: QuittanceProof = {
