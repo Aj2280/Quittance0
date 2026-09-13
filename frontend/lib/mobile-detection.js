@@ -1,27 +1,3 @@
-export type DeviceType = 'desktop' | 'mobile' | 'tablet' | 'unknown';
-
-export type MobileOs = 'ios' | 'android' | 'other' | null;
-
-export interface DeviceContext {
-  isMobile: boolean;
-  deviceType: DeviceType;
-  os: MobileOs;
-  isTouchDevice: boolean;
-  canInstallExtensions: boolean;
-  supportsFreighterExtension: boolean;
-  supportsSep0007: boolean;
-}
-
-export interface Sep0007PayParams {
-  destination: string;
-  amount?: string;
-  assetCode?: string;
-  assetIssuer?: string;
-  memo?: string;
-  memoType?: string;
-  networkPassphrase?: string;
-}
-
 const IOS_REGEX = /iPhone|iPad|iPod/i;
 const ANDROID_REGEX = /Android/i;
 const MOBILE_GENERIC_REGEX = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i;
@@ -34,7 +10,7 @@ const TABLET_REGEX = /iPad|tablet|(android(?!.*mobile))/i;
  * @param maxTouchPoints - Optional touch points count. Defaults to navigator.maxTouchPoints when in browser.
  * @returns DeviceContext representing the execution environment.
  */
-export function detectDevice(userAgent?: string, maxTouchPoints?: number): DeviceContext {
+function detectDevice(userAgent, maxTouchPoints) {
   const ua =
     userAgent !== undefined
       ? userAgent
@@ -52,7 +28,7 @@ export function detectDevice(userAgent?: string, maxTouchPoints?: number): Devic
   const isTouchDevice = touchPoints > 0;
   const isIpadMacIntel = !IOS_REGEX.test(ua) && /Macintosh/i.test(ua) && touchPoints > 1;
 
-  let os: MobileOs = null;
+  let os = null;
   if (IOS_REGEX.test(ua) || isIpadMacIntel) {
     os = 'ios';
   } else if (ANDROID_REGEX.test(ua)) {
@@ -61,7 +37,7 @@ export function detectDevice(userAgent?: string, maxTouchPoints?: number): Devic
     os = 'other';
   }
 
-  let deviceType: DeviceType = 'desktop';
+  let deviceType = 'desktop';
   if (TABLET_REGEX.test(ua) || isIpadMacIntel) {
     deviceType = 'tablet';
   } else if (os !== null || MOBILE_GENERIC_REGEX.test(ua)) {
@@ -89,7 +65,7 @@ export function detectDevice(userAgent?: string, maxTouchPoints?: number): Devic
  * @param userAgent - Optional user agent string.
  * @returns True if running on mobile or tablet browser.
  */
-export function isMobileBrowser(userAgent?: string): boolean {
+function isMobileBrowser(userAgent) {
   return detectDevice(userAgent).isMobile;
 }
 
@@ -99,7 +75,7 @@ export function isMobileBrowser(userAgent?: string): boolean {
  * @param userAgent - Optional user agent string.
  * @returns Platform display string.
  */
-export function getMobilePlatformName(userAgent?: string): string {
+function getMobilePlatformName(userAgent) {
   const { os, deviceType } = detectDevice(userAgent);
   if (os === 'ios') {
     return deviceType === 'tablet' ? 'iPadOS' : 'iOS';
@@ -119,7 +95,7 @@ export function getMobilePlatformName(userAgent?: string): string {
  * @param params - Parameters required to build the SEP-0007 URI.
  * @returns Fully formatted web+stellar:pay URI string.
  */
-export function buildSep0007PayUri(params: Sep0007PayParams): string {
+function buildSep0007PayUri(params) {
   if (!params || !params.destination) {
     throw new Error('Destination public key is required for SEP-0007 payment URI');
   }
@@ -150,3 +126,10 @@ export function buildSep0007PayUri(params: Sep0007PayParams): string {
 
   return `web+stellar:pay?${searchParams.toString()}`;
 }
+
+module.exports = {
+  detectDevice,
+  isMobileBrowser,
+  getMobilePlatformName,
+  buildSep0007PayUri,
+};

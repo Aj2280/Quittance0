@@ -1,286 +1,224 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { Copy, CheckCircle, AlertCircle, Smartphone, Download } from 'lucide-react';
-import { toast } from 'sonner';
+import React, { useState } from 'react';
+import { Copy, Check, ExternalLink, Smartphone, Monitor, AlertCircle } from 'lucide-react';
 import { copyWithFeedback } from '@/lib/clipboard-feedback';
-import {
-  detectDeviceContext,
-  buildLOBSTRDeepLink,
-  buildXBullDeepLink,
-  attemptDeepLink,
-  MOBILE_WALLETS,
-  getRecommendedMobileWallets,
-} from '@/lib/mobile-detection';
+import { buildSep0007PayUri } from '@/lib/mobile-detection';
+import { MOBILE_FALLBACK_COPY } from '@/lib/mobile-fallback-copy';
+import { toast } from 'sonner';
 
 interface MobilePaymentFallbackProps {
-  /**
-   * Payment destination (seller's public key)
-   */
   destination: string;
-  /**
-   * Payment amount
-   */
   amount: string;
-  /**
-   * Invoice memo
-   */
-  memo: string;
-  /**
-   * Asset code (default: XLM)
-   */
-  assetCode?: string;
-  /**
-   * Asset issuer (for non-native assets)
-   */
+  assetCode: string;
   assetIssuer?: string;
-  /**
-   * Payment URL to fall back to (for manual entry)
-   */
+  memo: string;
   paymentUrl: string;
-  /**
-   * SEP-0007 payment URI for QR code
-   */
-  stellarUri?: string;
+  onCopy?: (text: string, label: string) => void;
 }
 
+/**
+ * Fallback guidance and manual payment controls for mobile browsers.
+ *
+ * @param props - Payment parameters and copy handlers.
+ * @returns Accessible fallback component.
+ */
 export default function MobilePaymentFallback({
   destination,
   amount,
-  memo,
-  assetCode = 'XLM',
+  assetCode,
   assetIssuer,
+  memo,
   paymentUrl,
-  stellarUri = '',
+  onCopy,
 }: MobilePaymentFallbackProps) {
-  const [attemptedWallet, setAttemptedWallet] = useState<string | null>(null);
-  const deviceContext = useMemo(() => detectDeviceContext(), []);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
 
-  const platform = deviceContext.isIOS ? 'ios' : 'android';
-  const recommendedWallets = useMemo(
-    () => (deviceContext.isMobile ? getRecommendedMobileWallets(platform) : []),
-    [deviceContext.isMobile, platform]
-  );
+  const sep0007Uri = buildSep0007PayUri({
+    destination,
+    amount,
+    assetCode,
+    assetIssuer,
+    memo,
+  });
 
-  const handleWalletDeepLink = async (walletId: string) => {
-    setAttemptedWallet(walletId);
-
-    // Build the appropriate deep link
-    let deepLink = '';
-    if (walletId === 'lobstr') {
-      deepLink = buildLOBSTRDeepLink({ destination, amount, memo, assetCode, assetIssuer });
-    } else if (walletId === 'xbull') {
-      deepLink = buildXBullDeepLink({ destination, amount, memo, assetCode, assetIssuer });
-    }
-
-    if (!deepLink) {
-      toast.error(`${walletId} deep links not available`);
-      return;
-    }
-
-    // Attempt to open the wallet
-    await attemptDeepLink(
-      deepLink,
-      () => {
-        // Fallback: show installation prompt
-        toast.info(`${walletId} might not be installed. Please install it or use manual payment below.`);
-      },
-      1500
-    );
-  };
-
-  const handleCopyAddress = async () => {
-    if (await copyWithFeedback(destination)) {
-      toast.success('Destination address copied');
+  const handleCopy = async (text: string, fieldName: string, label: string) => {
+    const success = await copyWithFeedback(text);
+    if (success) {
+      setCopiedField(fieldName);
+      toast.success(`Copied ${label} to clipboard`);
+      if (onCopy) {
+        onCopy(text, label);
+      }
+      setTimeout(() => setCopiedField(null), 2000);
     } else {
-      toast.error('Failed to copy address');
-    }
-  };
-
-  const handleCopyMemo = async () => {
-    if (await copyWithFeedback(memo)) {
-      toast.success('Memo copied');
-    } else {
-      toast.error('Failed to copy memo');
-    }
-  };
-
-  const handleCopyPaymentUrl = async () => {
-    if (await copyWithFeedback(paymentUrl)) {
-      toast.success('Payment link copied');
-    } else {
-      toast.error('Failed to copy payment link');
+      toast.error(`Failed to copy ${label}`);
     }
   };
 
   return (
-    <div className="space-y-6">
-      {/* Mobile Wallet Options */}
-      {deviceContext.isMobile && recommendedWallets.length > 0 && (
-        <section className="bg-blue-50 border border-blue-200 rounded-lg p-5" aria-label="Mobile wallet options">
-          <div className="flex items-center gap-2 mb-4">
-            <Smartphone className="w-5 h-5 text-blue-700" aria-hidden="true" />
-            <h3 className="text-lg font-semibold text-blue-900">Pay with Mobile Wallet</h3>
+    <section
+      aria-labelledby="mobile-fallback-heading"
+      className="card border-2 border-amber-200 bg-amber-50/40 p-5 rounded-xl space-y-5"
+    >
+      <div className="flex items-start gap-3">
+        <div className="p-2 bg-amber-100 rounded-lg text-amber-800 shrink-0">
+          <Smartphone className="w-5 h-5" aria-hidden="true" />
+        </div>
+        <div className="space-y-1">
+          <div className="inline-block px-2 py-0.5 bg-amber-200 text-amber-900 text-xs font-semibold rounded">
+            {MOBILE_FALLBACK_COPY.badge}
           </div>
-
-          <p className="text-sm text-blue-800 mb-4">
-            If you have a Stellar wallet app installed, tap the button below to pay directly:
+          <h3
+            id="mobile-fallback-heading"
+            className="text-lg font-bold text-gray-900"
+          >
+            {MOBILE_FALLBACK_COPY.headline}
+          </h3>
+          <p className="text-sm text-gray-700">
+            {MOBILE_FALLBACK_COPY.description}
           </p>
+          <p className="text-xs text-gray-600 font-medium pt-1">
+            {MOBILE_FALLBACK_COPY.noAuthNote}
+          </p>
+        </div>
+      </div>
 
-          <div className="space-y-3">
-            {recommendedWallets.map((wallet) => (
-              <button
-                key={wallet.id}
-                onClick={() => handleWalletDeepLink(wallet.id)}
-                aria-busy={attemptedWallet === wallet.id}
-                className="w-full bg-white border-2 border-blue-300 hover:border-blue-500 hover:bg-blue-50 text-blue-900 font-semibold py-3 px-4 rounded-lg transition-all duration-200 flex items-center justify-center gap-2"
-              >
-                <Download className="w-5 h-5" aria-hidden="true" />
-                Pay with {wallet.name}
-              </button>
-            ))}
+      <div className="border-t border-amber-200/60 pt-4 space-y-4">
+        <div className="bg-white p-4 rounded-lg border border-gray-200 space-y-3">
+          <div className="flex items-center gap-2">
+            <ExternalLink className="w-4 h-4 text-primary" aria-hidden="true" />
+            <h4 className="font-semibold text-gray-900 text-sm">
+              {MOBILE_FALLBACK_COPY.options.mobileWallet.title}
+            </h4>
           </div>
-
-          <p className="text-xs text-blue-700 mt-4">
-            Don't have a Stellar wallet? Download one of the apps above or scroll down for other payment methods.
+          <p className="text-xs text-gray-600">
+            {MOBILE_FALLBACK_COPY.options.mobileWallet.description}
           </p>
-        </section>
-      )}
-
-      {/* Manual Payment Instructions */}
-      <section className="bg-gray-50 border border-gray-200 rounded-lg p-5" aria-label="Manual payment instructions">
-        <div className="flex items-center gap-2 mb-4">
-          <AlertCircle className="w-5 h-5 text-gray-700" aria-hidden="true" />
-          <h3 className="text-lg font-semibold text-gray-900">Manual Payment</h3>
+          <a
+            href={sep0007Uri}
+            className="btn btn-secondary w-full text-xs flex items-center justify-center gap-2 py-2"
+          >
+            <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+            {MOBILE_FALLBACK_COPY.options.mobileWallet.cta}
+          </a>
         </div>
 
-        <p className="text-sm text-gray-700 mb-5">
-          If you don't have a wallet app, open your Stellar wallet and send payment using these details:
-        </p>
-
-        {/* Payment Details Cards */}
-        <div className="space-y-4">
-          {/* Destination */}
-          <div className="bg-white border border-gray-200 rounded-lg p-4">
-            <label className="text-xs font-semibold text-gray-600 uppercase block mb-2">
-              Send To (Destination)
-            </label>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 text-sm text-gray-900 font-mono break-all bg-gray-50 p-2 rounded">
-                {destination}
-              </code>
-              <button
-                onClick={handleCopyAddress}
-                className="flex-shrink-0 p-2 hover:bg-gray-100 rounded transition-colors"
-                aria-label="Copy destination address"
-                title="Copy address"
-              >
-                <Copy className="w-5 h-5 text-gray-600" />
-              </button>
-            </div>
+        <div className="bg-white p-4 rounded-lg border border-gray-200 space-y-3">
+          <div className="flex items-center gap-2">
+            <Copy className="w-4 h-4 text-primary" aria-hidden="true" />
+            <h4 className="font-semibold text-gray-900 text-sm">
+              {MOBILE_FALLBACK_COPY.options.manualTransfer.title}
+            </h4>
           </div>
+          <p className="text-xs text-gray-600">
+            {MOBILE_FALLBACK_COPY.options.manualTransfer.description}
+          </p>
 
-          {/* Amount */}
-          <div className="bg-white border border-gray-200 rounded-lg p-4">
-            <label className="text-xs font-semibold text-gray-600 uppercase block mb-2">
-              Amount
-            </label>
-            <div className="flex items-center gap-3">
-              <span className="text-2xl font-bold text-gray-900">
-                {amount} {assetCode}
-              </span>
-            </div>
-          </div>
-
-          {/* Memo */}
-          <div className="bg-white border border-gray-200 rounded-lg p-4">
-            <label className="text-xs font-semibold text-gray-600 uppercase block mb-2">
-              Memo (Important: Required for payment verification)
-            </label>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 text-sm text-gray-900 font-mono bg-gray-50 p-2 rounded">
-                {memo}
-              </code>
-              <button
-                onClick={handleCopyMemo}
-                className="flex-shrink-0 p-2 hover:bg-gray-100 rounded transition-colors"
-                aria-label="Copy memo"
-                title="Copy memo"
-              >
-                <Copy className="w-5 h-5 text-gray-600" />
-              </button>
-            </div>
-          </div>
-
-          {/* Asset Info for Non-XLM */}
-          {assetCode !== 'XLM' && assetIssuer && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-              <label className="text-xs font-semibold text-amber-800 uppercase block mb-2">
-                Asset Issuer
-              </label>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between bg-gray-50 p-2 rounded border border-gray-200 text-xs">
+              <span className="text-gray-500 font-medium">Destination:</span>
               <div className="flex items-center gap-2">
-                <code className="flex-1 text-sm text-amber-900 font-mono break-all bg-amber-100 p-2 rounded">
-                  {assetIssuer}
+                <code className="font-mono text-gray-800 truncate max-w-[140px] sm:max-w-[200px]">
+                  {destination}
                 </code>
                 <button
-                  onClick={() => copyWithFeedback(assetIssuer)}
-                  className="flex-shrink-0 p-2 hover:bg-amber-100 rounded transition-colors"
-                  aria-label="Copy asset issuer"
-                  title="Copy issuer"
+                  type="button"
+                  onClick={() => handleCopy(destination, 'destination', 'Destination Address')}
+                  className="p-1 text-gray-600 hover:text-gray-900"
+                  aria-label="Copy destination address"
                 >
-                  <Copy className="w-5 h-5 text-amber-700" />
+                  {copiedField === 'destination' ? (
+                    <Check className="w-3.5 h-3.5 text-green-700" aria-hidden="true" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
                 </button>
               </div>
-              <p className="text-xs text-amber-700 mt-2">
-                Make sure your wallet has a trustline for {assetCode} from this issuer before paying.
-              </p>
             </div>
-          )}
-        </div>
-      </section>
 
-      {/* Desktop/Browser Fallback */}
-      <section className="bg-green-50 border border-green-200 rounded-lg p-5" aria-label="Desktop fallback">
-        <div className="flex items-center gap-2 mb-4">
-          <CheckCircle className="w-5 h-5 text-green-700" aria-hidden="true" />
-          <h3 className="text-lg font-semibold text-green-900">Use Desktop Wallet</h3>
-        </div>
+            <div className="flex items-center justify-between bg-gray-50 p-2 rounded border border-gray-200 text-xs">
+              <span className="text-gray-500 font-medium">Memo:</span>
+              <div className="flex items-center gap-2">
+                <code className="font-mono font-bold text-gray-900">
+                  {memo}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => handleCopy(memo, 'memo', 'Invoice Memo')}
+                  className="p-1 text-gray-600 hover:text-gray-900"
+                  aria-label="Copy invoice memo"
+                >
+                  {copiedField === 'memo' ? (
+                    <Check className="w-3.5 h-3.5 text-green-700" aria-hidden="true" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+            </div>
 
-        <p className="text-sm text-green-800 mb-4">
-          For the smoothest experience, open this payment link on a desktop or laptop computer where you have a Stellar wallet extension installed:
-        </p>
+            <div className="flex items-center justify-between bg-gray-50 p-2 rounded border border-gray-200 text-xs">
+              <span className="text-gray-500 font-medium">Amount:</span>
+              <div className="flex items-center gap-2">
+                <code className="font-mono text-gray-800">
+                  {amount} {assetCode}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => handleCopy(amount, 'amount', 'Amount')}
+                  className="p-1 text-gray-600 hover:text-gray-900"
+                  aria-label="Copy invoice amount"
+                >
+                  {copiedField === 'amount' ? (
+                    <Check className="w-3.5 h-3.5 text-green-700" aria-hidden="true" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
 
-        <div className="bg-white border border-green-200 rounded-lg p-4 mb-4">
-          <p className="text-xs font-semibold text-green-700 uppercase mb-2">Payment Link</p>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 text-xs text-green-900 font-mono break-all bg-green-50 p-2 rounded">
-              {paymentUrl}
-            </code>
-            <button
-              onClick={handleCopyPaymentUrl}
-              className="flex-shrink-0 p-2 hover:bg-green-100 rounded transition-colors"
-              aria-label="Copy payment link"
-              title="Copy payment link"
-            >
-              <Copy className="w-5 h-5 text-green-700" />
-            </button>
+          <div className="flex items-start gap-2 bg-amber-50 p-2 rounded text-xs text-amber-900 border border-amber-200">
+            <AlertCircle className="w-4 h-4 shrink-0 text-amber-700 mt-0.5" aria-hidden="true" />
+            <span>{MOBILE_FALLBACK_COPY.options.manualTransfer.memoWarning}</span>
           </div>
         </div>
 
-        <div className="text-sm text-green-800">
-          <p className="font-semibold mb-2">Steps:</p>
-          <ol className="list-decimal list-inside space-y-1 text-xs">
-            <li>Copy the payment link above</li>
-            <li>Open it on your desktop/laptop browser</li>
-            <li>Your wallet will automatically handle the payment</li>
-          </ol>
+        <div className="bg-white p-4 rounded-lg border border-gray-200 space-y-3">
+          <div className="flex items-center gap-2">
+            <Monitor className="w-4 h-4 text-primary" aria-hidden="true" />
+            <h4 className="font-semibold text-gray-900 text-sm">
+              {MOBILE_FALLBACK_COPY.options.desktopHandoff.title}
+            </h4>
+          </div>
+          <p className="text-xs text-gray-600">
+            {MOBILE_FALLBACK_COPY.options.desktopHandoff.description}
+          </p>
+          <button
+            type="button"
+            onClick={() => handleCopy(paymentUrl, 'paymentUrl', 'Payment Link')}
+            className="btn btn-outline w-full text-xs flex items-center justify-center gap-2 py-2"
+          >
+            {copiedField === 'paymentUrl' ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-green-700" aria-hidden="true" />
+                <span>Link Copied</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{MOBILE_FALLBACK_COPY.options.desktopHandoff.cta}</span>
+              </>
+            )}
+          </button>
         </div>
-      </section>
+      </div>
 
-      {/* Accessibility Note */}
-      <p className="text-xs text-gray-600 italic">
-        All payment information is also shown in copyable form above. You can copy any field and paste it into your Stellar wallet application.
+      <p className="text-xs text-gray-500 text-center italic">
+        {MOBILE_FALLBACK_COPY.unsupportedNotice}
       </p>
-    </div>
+    </section>
   );
 }
