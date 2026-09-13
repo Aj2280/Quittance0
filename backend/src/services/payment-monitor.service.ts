@@ -46,10 +46,13 @@ export interface PaymentMonitorOptions {
   database?: Queryable;
 }
 
-function defaultCheckpointStore(database: Queryable): PaymentMonitorCheckpointStore {
+function defaultCheckpointStore(database?: Queryable): PaymentMonitorCheckpointStore {
   const cursorFile = process.env.PAYMENT_MONITOR_CURSOR_FILE?.trim();
   if (cursorFile) {
     return new FilePaymentMonitorCheckpointStore(path.resolve(cursorFile));
+  }
+  if (!database || process.env.STORAGE_MODE === 'memory') {
+    return new FilePaymentMonitorCheckpointStore(path.resolve('data/payment-monitor-checkpoint.json'));
   }
   return new PostgresPaymentMonitorCheckpointStore(database);
 }
@@ -63,15 +66,15 @@ function defaultCheckpointStore(database: Queryable): PaymentMonitorCheckpointSt
  * replay harmless. A failure never skips later records from the same page.
  */
 export class PaymentMonitorService {
-  private readonly account?: string;
-  private readonly network: string;
-  private readonly pollIntervalMs: number;
-  private readonly pageSize: number;
-  private readonly maxPagesPerRun: number;
-  private readonly source: PaymentPageSource;
-  private readonly invoices: MonitorInvoiceService;
-  private readonly checkpoints: PaymentMonitorCheckpointStore;
-  private readonly database: Queryable;
+  private account?: string;
+  private network: string;
+  private pollIntervalMs: number;
+  private pageSize: number;
+  private maxPagesPerRun: number;
+  private source: PaymentPageSource;
+  private invoices: MonitorInvoiceService;
+  private checkpoints: PaymentMonitorCheckpointStore;
+  private database?: Queryable;
   private pollTimer: NodeJS.Timeout | null = null;
   private expirationTimer: NodeJS.Timeout | null = null;
   private isRunning = false;
@@ -86,8 +89,28 @@ export class PaymentMonitorService {
     this.maxPagesPerRun = Math.max(1, options.maxPagesPerRun ?? 10);
     this.source = options.source ?? stellarService;
     this.invoices = options.invoices ?? invoiceService;
-    this.database = options.database ?? pool;
+    this.database = 'database' in options ? options.database : (process.env.STORAGE_MODE === 'memory' ? undefined : pool);
     this.checkpoints = options.checkpoints ?? defaultCheckpointStore(this.database);
+    this.snapshot.account = this.account;
+  }
+
+  /**
+   * Reconfigures monitor dependencies and runtime parameters.
+   */
+  configure(options: Partial<PaymentMonitorOptions>): void {
+    if (options.account !== undefined) this.account = options.account;
+    if (options.network !== undefined) this.network = options.network;
+    if (options.pollIntervalMs !== undefined) this.pollIntervalMs = options.pollIntervalMs;
+    if (options.pageSize !== undefined) this.pageSize = Math.min(200, Math.max(1, options.pageSize));
+    if (options.maxPagesPerRun !== undefined) this.maxPagesPerRun = Math.max(1, options.maxPagesPerRun);
+    if (options.source !== undefined) this.source = options.source;
+    if (options.invoices !== undefined) this.invoices = options.invoices;
+    if ('database' in options) this.database = options.database;
+    if (options.checkpoints !== undefined) {
+      this.checkpoints = options.checkpoints;
+    } else if (options.database !== undefined) {
+      this.checkpoints = defaultCheckpointStore(this.database);
+    }
     this.snapshot.account = this.account;
   }
 
@@ -242,24 +265,31 @@ export class PaymentMonitorService {
   }
 
   private async saveTransaction(payment: PaymentRecord, invoiceId: string) {
-    await this.database.query(
-      `INSERT INTO transactions (
-        invoice_id, from_address, to_address, amount, asset_code, asset_issuer,
-        tx_hash, memo, ledger, processed_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-      ON CONFLICT (tx_hash) DO NOTHING`,
-      [
-        invoiceId,
-        payment.from,
-        payment.to,
-        payment.amount,
-        payment.assetCode,
-        payment.assetIssuer || null,
-        payment.txHash,
-        payment.memo || null,
-        payment.ledger,
-      ]
-    );
+    if (!this.database) {
+      return;
+    }
+    try {
+      await this.database.query(
+        `INSERT INTO transactions (
+          invoice_id, from_address, to_address, amount, asset_code, asset_issuer,
+          tx_hash, memo, ledger, processed_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+        ON CONFLICT (tx_hash) DO NOTHING`,
+        [
+          invoiceId,
+          payment.from,
+          payment.to,
+          payment.amount,
+          payment.assetCode,
+          payment.assetIssuer || null,
+          payment.txHash,
+          payment.memo || null,
+          payment.ledger,
+        ]
+      );
+    } catch (error) {
+      console.warn('Could not persist transaction record:', error);
+    }
   }
 
   /** Keep the operator endpoint, now backed by the durable cursor. */
