@@ -174,6 +174,10 @@ server.ts ─────┘                                    └─ postgres-
 
 A bug fix in a handler applies to both servers at once.
 
+The event taxonomy, correlation rules, redacted JSON examples, and PaaS metric
+queries for this request path are defined in
+[`docs/STRUCTURED_LOGGING.md`](./docs/STRUCTURED_LOGGING.md).
+
 ---
 
 ## Requirements
