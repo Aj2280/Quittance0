@@ -4,6 +4,7 @@
  */
 
 const { assertPaymentProofAvailable, canExportPaymentProof } = require('./payment-proof-policy.js');
+const { buildHorizonTxUrl, resolveExplorerNetwork } = require('./explorer-tx-link.js');
 
 function isValidEmailFormat(email) {
   if (typeof email !== 'string') return false;
@@ -49,6 +50,17 @@ function canSendProofEmail(invoice) {
 function getProofMailtoRecipient(invoice) {
   if (!invoice) return '';
   return (invoice.customerEmail || invoice.payerEmail || '').trim();
+}
+
+/**
+ * Explorer network for an invoice: the invoice's own network wins, then the
+ * app-level configuration, then public.
+ */
+function resolveInvoiceNetwork(invoice) {
+  const configured = invoice && invoice.network
+    ? invoice.network
+    : (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_STELLAR_NETWORK);
+  return resolveExplorerNetwork(configured);
 }
 
 function buildInvoiceMailto(invoice, baseUrl) {
@@ -112,6 +124,10 @@ function buildProofMailto(invoice, baseUrl) {
   const shortId = (invoice.id || '').substring(0, 8).toUpperCase();
   const subject = `Payment Proof - Invoice #${shortId} - ${invoice.amount} ${invoice.assetCode || 'XLM'}`;
   const payUrl = resolvePayUrl(invoice.id, baseUrl);
+  const explorerUrl = buildHorizonTxUrl(
+    invoice.paymentTxHash,
+    resolveInvoiceNetwork(invoice)
+  );
 
   const lines = [
     'Payment Proof Details:',
@@ -125,6 +141,9 @@ function buildProofMailto(invoice, baseUrl) {
   }
   if (invoice.paymentTxHash) {
     lines.push(`Transaction Hash: ${invoice.paymentTxHash}`);
+  }
+  if (explorerUrl) {
+    lines.push(`Explorer: ${explorerUrl}`);
   }
   if (invoice.sellerPublicKey) {
     lines.push(`Seller Address: ${invoice.sellerPublicKey}`);
