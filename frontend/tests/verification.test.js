@@ -99,6 +99,7 @@ test('covers every rejection code with a message', () => {
     'AMOUNT_MISMATCH',
     'ASSET_MISMATCH',
     'NETWORK_MISMATCH',
+    'TX_HASH_ALREADY_USED',
   ];
 
   assert.deepEqual(Object.keys(VERIFICATION_MESSAGES).sort(), codes.sort());

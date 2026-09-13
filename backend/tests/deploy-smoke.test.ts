@@ -3,7 +3,7 @@ import { after, before, describe, it } from 'node:test';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 
-const SELLER = 'G' + 'A'.repeat(55);
+const SELLER = 'GB3Q3VRHH3OQDYITTLONDLEHWQGKB27T2BEDSFHIUMOERULVXPDXRKG4';
 
 describe('deployed MVP smoke contract', () => {
   let server: Server;

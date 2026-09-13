@@ -1,8 +1,5 @@
-// Fixture for the canonical quittance document (#376).
-//
-// One invoice, one settlement, one fixed clock: the golden JSON below is what
-// serializeQuittanceProof must produce for it, so any change to the document
-// shape shows up as a failing diff instead of as two exports that disagree.
+const fs = require('fs');
+const path = require('path');
 
 const NETWORK = 'testnet';
 
@@ -70,6 +67,10 @@ const goldenProofJson = [
   '',
 ].join(String.fromCharCode(10));
 
+const goldenProofHtml = fs.readFileSync(path.join(__dirname, 'golden-proof.html'), 'utf8');
+
+const goldenProofPdfBuffer = fs.readFileSync(path.join(__dirname, 'golden-proof.pdf'));
+
 module.exports = {
   NETWORK,
   TX_HASH,
@@ -77,4 +78,6 @@ module.exports = {
   paidInvoice,
   pendingInvoice,
   goldenProofJson,
+  goldenProofHtml,
+  goldenProofPdfBuffer,
 };

@@ -49,7 +49,8 @@ export type VerificationCode =
   | 'DESTINATION_MISMATCH'
   | 'AMOUNT_MISMATCH'
   | 'ASSET_MISMATCH'
-  | 'NETWORK_MISMATCH';
+  | 'NETWORK_MISMATCH'
+  | 'TX_HASH_ALREADY_USED';
 
 /** The rejection code each check produces when it fails. */
 export const CHECK_REJECTION_CODES: Record<VerificationCheck, VerificationCode> = {
@@ -83,6 +84,7 @@ export const VERIFICATION_MESSAGES: Record<VerificationCode, string> = {
   AMOUNT_MISMATCH: 'Amount mismatch',
   ASSET_MISMATCH: 'Asset mismatch',
   NETWORK_MISMATCH: 'Transaction is on a different Stellar network',
+  TX_HASH_ALREADY_USED: 'Transaction already settled another invoice',
 };
 
 /** The stable set of rejection codes, in declaration order. */

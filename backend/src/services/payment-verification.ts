@@ -18,54 +18,20 @@ import {
 } from '../utils/asset-helpers';
 import { amountsMatch as stroopAmountsMatch } from '../utils/verify-amount-tolerance';
 
-export type VerificationCode =
-  | 'MISSING_TX_HASH'
-  | 'INVALID_TX_HASH'
-  | 'INVALID_PAYER_NAME'
-  | 'INVALID_PAYER_EMAIL'
-  | 'PAYER_INFO_TOO_LONG'
-  | 'INVOICE_ALREADY_PAID'
-  | 'INVOICE_EXPIRED'
-  | 'INVOICE_NOT_PENDING'
-  | 'TRANSACTION_NOT_FOUND'
-  | 'NO_PAYMENT_OPERATION'
-  | 'MEMO_MISMATCH'
-  | 'DESTINATION_MISMATCH'
-  | 'AMOUNT_MISMATCH'
-  | 'ASSET_MISMATCH'
-  | 'NETWORK_MISMATCH'
-  /** Issue #379: the transaction already settled a different invoice. */
-  | 'TX_HASH_ALREADY_USED';
-
-/** User-facing message for every rejection code. Mirrored in `frontend/lib/verification.js`. */
-export const VERIFICATION_MESSAGES: Record<VerificationCode, string> = {
-  MISSING_TX_HASH: 'Transaction hash is required',
-  INVALID_TX_HASH: 'Transaction hash must be 64 hexadecimal characters',
-  INVALID_PAYER_NAME: 'Payer name must be text',
-  INVALID_PAYER_EMAIL: 'Payer email is invalid',
-  PAYER_INFO_TOO_LONG: 'Payer information is too long',
-  INVOICE_ALREADY_PAID: 'Invoice has already been paid',
-  INVOICE_EXPIRED: 'Invoice has expired and can no longer accept payment',
-  INVOICE_NOT_PENDING: 'Invoice is not pending',
-  TRANSACTION_NOT_FOUND: 'Transaction not found on Stellar',
-  NO_PAYMENT_OPERATION: 'No payment operation found in transaction',
-  MEMO_MISMATCH: 'Memo mismatch',
-  DESTINATION_MISMATCH: 'Payment destination mismatch',
-  AMOUNT_MISMATCH: 'Amount mismatch',
-  ASSET_MISMATCH: 'Asset mismatch',
-  NETWORK_MISMATCH: 'Transaction is on a different Stellar network',
-  TX_HASH_ALREADY_USED: 'Transaction already settled another invoice',
-};
-
-/** The stable set of rejection codes, in declaration order. */
-export const VERIFICATION_CODES: VerificationCode[] = Object.keys(
-  VERIFICATION_MESSAGES
-) as VerificationCode[];
-
-/** The canonical user-facing message for a rejection code. */
-export function messageForCode(code: VerificationCode): string {
-  return VERIFICATION_MESSAGES[code];
-}
+import {
+  messageForCode,
+  VERIFICATION_CODES,
+  VERIFICATION_MESSAGES,
+} from '../../../shared/verification';
+import type { VerificationCode } from '../../../shared/verification';
+export type { VerificationCode, VerificationFailureBody } from '../../../shared/verification';
+export {
+  VERIFICATION_CHECKS,
+  CHECK_REJECTION_CODES,
+  VERIFICATION_MESSAGES,
+  VERIFICATION_CODES,
+  messageForCode,
+} from '../../../shared/verification';
 
 export interface VerificationFailure {
   ok: false;
@@ -182,6 +148,102 @@ export interface HorizonOperationLike {
   asset_type?: string;
   asset_code?: string;
   asset_issuer?: string;
+  dest_amount?: string;
+  dest_asset_type?: string;
+  dest_asset_code?: string;
+  dest_asset_issuer?: string;
+  source_amount?: string;
+  source_asset_type?: string;
+  source_asset_code?: string;
+  source_asset_issuer?: string;
+}
+
+export interface NormalizedPaymentOperation {
+  type: string;
+  from: string;
+  to: string;
+  amount: string;
+  assetType: string;
+  assetCode?: string;
+  assetIssuer?: string;
+}
+
+/**
+ * Normalizes payment-delivering Horizon operations including standard and path payments.
+ *
+ * @param operation - Raw Horizon operation.
+ * @returns Normalized payment details, or null if operation is not a supported payment shape.
+ */
+export function normalizePaymentOperation(
+  operation: HorizonOperationLike,
+): NormalizedPaymentOperation | null {
+  if (operation.type === 'payment') {
+    return {
+      type: 'payment',
+      from: operation.from ?? '',
+      to: operation.to ?? '',
+      amount: operation.amount ?? '',
+      assetType: operation.asset_type ?? 'native',
+      assetCode: operation.asset_code,
+      assetIssuer: operation.asset_issuer,
+    };
+  }
+
+  if (operation.type === 'path_payment_strict_receive') {
+    return {
+      type: 'path_payment_strict_receive',
+      from: operation.from ?? '',
+      to: operation.to ?? '',
+      amount: operation.amount ?? '',
+      assetType: operation.asset_type ?? 'native',
+      assetCode: operation.asset_code,
+      assetIssuer: operation.asset_issuer,
+    };
+  }
+
+  if (operation.type === 'path_payment_strict_send') {
+    return {
+      type: 'path_payment_strict_send',
+      from: operation.from ?? '',
+      to: operation.to ?? '',
+      amount: operation.dest_amount ?? operation.amount ?? '',
+      assetType: operation.dest_asset_type ?? operation.asset_type ?? 'native',
+      assetCode: operation.dest_asset_code ?? operation.asset_code,
+      assetIssuer: operation.dest_asset_issuer ?? operation.asset_issuer,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Finds the payment-delivering operation for an invoice.
+ * If destination is given, prioritizes an operation paying that destination.
+ *
+ * @param operations - List of operations from Horizon.
+ * @param destination - Target payment destination.
+ * @returns Normalized payment operation or null.
+ */
+export function findPaymentOperation(
+  operations: HorizonOperationLike[],
+  destination?: string,
+): NormalizedPaymentOperation | null {
+  const candidates = (operations || [])
+    .map(normalizePaymentOperation)
+    .filter((op): op is NormalizedPaymentOperation => op !== null);
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  if (destination) {
+    const match = candidates.find((op) => op.to === destination);
+    if (match) {
+      return match;
+    }
+  }
+
+  return candidates[0];
 }
 
 export interface VerifiedPayment {
@@ -211,10 +273,6 @@ function normalizeMemo(memo: unknown): string {
   return typeof memo === 'string' ? memo : '';
 }
 
-function assetCodeOf(operation: HorizonOperationLike): string {
-  return operation.asset_type === 'native' ? 'XLM' : operation.asset_code ?? '';
-}
-
 export function amountsMatch(actual: unknown, expected: string | number): boolean {
   return stroopAmountsMatch(expected, actual, 0);
 }
@@ -237,7 +295,7 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
     return failure('NETWORK_MISMATCH');
   }
 
-  const paymentOp = (operations || []).find((operation) => operation.type === 'payment');
+  const paymentOp = findPaymentOperation(operations, expected.destination);
   if (!paymentOp) {
     return failure('NO_PAYMENT_OPERATION');
   }
@@ -254,35 +312,31 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
     return failure('AMOUNT_MISMATCH');
   }
 
-  // A Stellar asset is the pair (code, issuer), never the code alone. Anyone
-  // can issue a credit asset coded "XLM", so comparing codes would let a
-  // worthless look-alike settle a native invoice. `assetsMatch` compares
-  // identities and fails closed when either side has no issuer to pin it to.
   const invoiceAsset = resolveInvoiceAsset({
     assetCode: expected.assetCode,
     assetIssuer: expected.assetIssuer,
   });
   const paidAsset = resolvePaymentAsset({
-    assetType: paymentOp.asset_type,
-    assetCode: paymentOp.asset_code,
-    assetIssuer: paymentOp.asset_issuer,
+    assetType: paymentOp.assetType,
+    assetCode: paymentOp.assetCode,
+    assetIssuer: paymentOp.assetIssuer,
   });
 
   if (!assetsMatch(invoiceAsset, paidAsset)) {
     return failure('ASSET_MISMATCH');
   }
 
-  const paidAssetCode = assetCodeOf(paymentOp);
+  const paidAssetCode = paymentOp.assetType === 'native' ? 'XLM' : paymentOp.assetCode ?? '';
 
   return {
     ok: true,
     value: {
       txHash: hashCheck.value,
-      from: paymentOp.from ?? '',
-      to: paymentOp.to ?? '',
-      amount: paymentOp.amount ?? '',
+      from: paymentOp.from,
+      to: paymentOp.to,
+      amount: paymentOp.amount,
       assetCode: paidAssetCode,
-      assetIssuer: paymentOp.asset_type === 'native' ? undefined : paymentOp.asset_issuer,
+      assetIssuer: paymentOp.assetType === 'native' ? undefined : paymentOp.assetIssuer,
       memo: normalizeMemo(transaction?.memo),
     },
   };
