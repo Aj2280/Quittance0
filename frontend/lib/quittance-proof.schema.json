@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://quittance.network/schemas/quittance.v1.json",
+  "title": "QuittanceProof",
+  "description": "Canonical proof of payment schema for Quittance settlement exports and PDF generation.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "invoiceId",
+    "network",
+    "status",
+    "issuedAt",
+    "dueAt",
+    "settledAt",
+    "seller",
+    "payer",
+    "payment",
+    "verification",
+    "document"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "quittance.v1"
+    },
+    "invoiceId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "network": {
+      "type": "string",
+      "enum": ["testnet", "public"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["PAID", "PENDING", "EXPIRED", "CANCELLED"]
+    },
+    "issuedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "dueAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "settledAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "seller": {
+      "type": "string",
+      "pattern": "^G[A-Z2-7]{55}$"
+    },
+    "payer": {
+      "type": ["string", "null"],
+      "pattern": "^G[A-Z2-7]{55}$"
+    },
+    "payment": {
+      "type": "object",
+      "required": ["txHash", "memo", "amount", "asset", "explorerUrl"],
+      "additionalProperties": false,
+      "properties": {
+        "txHash": {
+          "type": "string"
+        },
+        "memo": {
+          "type": ["string", "null"]
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+(?:\\.\\d{1,7})?$"
+        },
+        "asset": {
+          "type": "object",
+          "required": ["code", "issuer"],
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "issuer": {
+              "type": ["string", "null"]
+            }
+          }
+        },
+        "explorerUrl": {
+          "type": ["string", "null"],
+          "format": "uri"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": ["status", "method", "checkedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["verified", "unverified"]
+        },
+        "method": {
+          "type": "string",
+          "enum": ["memo-and-amount", "none"]
+        },
+        "checkedAt": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        }
+      }
+    },
+    "document": {
+      "type": "object",
+      "required": ["generatedAtUtc", "generatedBy"],
+      "additionalProperties": false,
+      "properties": {
+        "generatedAtUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "generatedBy": {
+          "type": "string",
+          "const": "quittance-web"
+        }
+      }
+    }
+  }
+}
