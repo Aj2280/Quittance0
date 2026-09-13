@@ -1,172 +1,208 @@
-/**
- * Safe amount comparison for Stellar payments without floating-point errors.
- *
- * Stellar amounts are decimals with up to 7 fractional digits (stroops).
- * Comparing floats directly leads to rounding errors; this helper converts to
- * stroops (integers), compares there, and documents the tolerance.
- *
- * Issue #378: Hardened for USDC payment edge cases with path payments and
- * amount precision verification.
- */
-
-/**
- * Stroop precision: 1 XLM = 10,000,000 stroops
- * All amounts in Stellar are represented with 7 decimal places max.
- */
 export const STROOP_DECIMALS = 7;
-export const STROOP_SCALE = Math.pow(10, STROOP_DECIMALS); // 10000000
+export const STROOPS_PER_UNIT = 10_000_000n;
 
-/**
- * Largest safe amount in stroops before overflow into JavaScript's unsafe integer range.
- * Stellar's total supply is ~5B XLM, well below this limit.
- */
-export const MAX_SAFE_STROOP = Number.MAX_SAFE_INTEGER;
+export type AmountDeltaStatus = 'exact' | 'underpaid' | 'overpaid' | 'invalid';
 
-/**
- * Convert Stellar amount (string or number) to stroops (safe integer).
- *
- * @param amount Amount as string (e.g., "100.5") or number
- * @returns Stroops as integer, or null if conversion fails
- */
-export function toStroops(amount: unknown): number | null {
-  if (typeof amount !== 'string' && typeof amount !== 'number') {
-    return null;
-  }
-
-  const str = String(amount).trim();
-  if (str === '') return null;
-
-  const num = Number(str);
-  if (!Number.isFinite(num) || num < 0) return null;
-
-  const stroops = Math.round(num * STROOP_SCALE);
-  if (!Number.isSafeInteger(stroops) || stroops > MAX_SAFE_STROOP) {
-    return null;
-  }
-
-  return stroops;
+export interface AmountDelta {
+  status: AmountDeltaStatus;
+  expectedStroops: bigint | null;
+  actualStroops: bigint | null;
+  diffStroops: bigint | null;
+  diffFormatted: string | null;
 }
 
 /**
- * Amount comparison with configurable tolerance in stroops.
+ * Converts a string decimal or number representation into an integer stroop count.
  *
- * This is the core comparison for payment verification. Default tolerance is
- * 0 (exact match). For path payments or on-chain settlement variations, you
- * can increase tolerance to N stroops.
+ * @param value - String decimal, number, or bigint to convert.
+ * @returns BigInt representation in stroops (10^-7 units), or null if the input is invalid.
+ */
+export function parseStroops(value: unknown): bigint | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'object') {
+    return null;
+  }
+
+  let str = '';
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < 0) {
+      return null;
+    }
+    str = value.toString();
+  } else if (typeof value === 'string') {
+    str = value.trim();
+    if (!str) {
+      return null;
+    }
+  } else if (typeof value === 'bigint') {
+    if (value < 0n) {
+      return null;
+    }
+    return value;
+  } else {
+    return null;
+  }
+
+  if (!/^\d+(\.\d+)?$/.test(str)) {
+    return null;
+  }
+
+  const parts = str.split('.');
+  const intPart = parts[0];
+  const fracPart = parts[1] || '';
+
+  if (fracPart.length > STROOP_DECIMALS) {
+    const frac7 = fracPart.slice(0, STROOP_DECIMALS);
+    const eighthDigit = parseInt(fracPart[STROOP_DECIMALS], 10);
+    let stroops = BigInt(intPart) * STROOPS_PER_UNIT + BigInt(frac7);
+    if (eighthDigit >= 5) {
+      stroops += 1n;
+    }
+    return stroops;
+  }
+
+  const paddedFrac = fracPart.padEnd(STROOP_DECIMALS, '0');
+  return BigInt(intPart) * STROOPS_PER_UNIT + BigInt(paddedFrac);
+}
+
+/**
+ * Formats a BigInt stroop count back into a 7-decimal string without float arithmetic.
  *
- * Why stroops?
- * - Avoids float rounding errors that can cause false rejections
- * - Stellar amounts are always fixed at 7 decimal places
- * - Safe integer range covers all realistic payment amounts
+ * @param stroops - Integer count of stroops to format.
+ * @returns Formatted decimal string with 7 fractional digits.
+ */
+export function formatStroops(stroops: bigint): string {
+  const isNegative = stroops < 0n;
+  const absStroops = isNegative ? -stroops : stroops;
+  const intPart = absStroops / STROOPS_PER_UNIT;
+  const fracPart = (absStroops % STROOPS_PER_UNIT).toString().padStart(STROOP_DECIMALS, '0');
+  const formatted = `${intPart.toString()}.${fracPart}`;
+  return isNegative ? `-${formatted}` : formatted;
+}
+
+/**
+ * Compares an expected invoice amount against an observed payment amount within a stroop tolerance.
  *
- * @param expected    Amount expected on invoice (XLM, USDC, etc.)
- * @param actual      Amount from Horizon payment operation
- * @param tolerance   Stroop tolerance (default: 0 for exact match)
- * @returns true if amounts match within tolerance, false otherwise
- *
- * @example
- * // Exact match
- * compareAmounts('100.5', '100.5000000') === true
- *
- * // Float rounding absorbed (< 0.5 stroop)
- * compareAmounts('100.1', '100.1000001') === true
- *
- * // Underpayment rejected
- * compareAmounts('100', '99.9999999') === false
- *
- * // Overpayment rejected (default)
- * compareAmounts('100', '100.0000001') === false
- *
- * // Overpayment accepted with tolerance
- * compareAmounts('100', '100.0000001', 1) === true
+ * @param expected - Expected invoice amount.
+ * @param actual - Observed payment amount from Horizon.
+ * @param toleranceStroops - Permitted tolerance in stroops (defaults to 0 for exact match).
+ * @returns True if both amounts are valid and within tolerance, false otherwise.
  */
 export function compareAmounts(
   expected: unknown,
   actual: unknown,
-  tolerance: number = 0
+  toleranceStroops: number | bigint = 0,
 ): boolean {
-  // Validate tolerance
-  if (!Number.isInteger(tolerance) || tolerance < 0) {
+  if (typeof toleranceStroops === 'number') {
+    if (!Number.isInteger(toleranceStroops) || toleranceStroops < 0) {
+      return false;
+    }
+  } else if (typeof toleranceStroops === 'bigint') {
+    if (toleranceStroops < 0n) {
+      return false;
+    }
+  } else {
     return false;
   }
 
-  const expectedStroops = toStroops(expected);
-  const actualStroops = toStroops(actual);
+  const expectedStroops = parseStroops(expected);
+  const actualStroops = parseStroops(actual);
 
   if (expectedStroops === null || actualStroops === null) {
     return false;
   }
 
-  const delta = Math.abs(expectedStroops - actualStroops);
-  return delta <= tolerance;
+  const tol = BigInt(toleranceStroops);
+  const diff = expectedStroops > actualStroops ? expectedStroops - actualStroops : actualStroops - expectedStroops;
+  return diff <= tol;
 }
 
 /**
- * Check if payment is underpaid (strictly less than expected).
+ * Determines whether the observed payment amount is less than expected beyond the specified tolerance.
  *
- * Useful for diagnostics: distinguishing underpayment from overpayment
- * in error messages.
- *
- * @returns true if actual < expected
+ * @param expected - Expected invoice amount.
+ * @param actual - Observed payment amount.
+ * @param toleranceStroops - Permitted tolerance in stroops.
+ * @returns True if the payment is underpaid beyond tolerance.
  */
-export function isUnderpaid(expected: unknown, actual: unknown): boolean {
-  const expectedStroops = toStroops(expected);
-  const actualStroops = toStroops(actual);
-
-  if (expectedStroops === null || actualStroops === null) {
-    return false;
-  }
-
-  return actualStroops < expectedStroops;
-}
-
-/**
- * Check if payment is overpaid (strictly greater than expected).
- *
- * @returns true if actual > expected
- */
-export function isOverpaid(expected: unknown, actual: unknown): boolean {
-  const expectedStroops = toStroops(expected);
-  const actualStroops = toStroops(actual);
-
-  if (expectedStroops === null || actualStroops === null) {
-    return false;
-  }
-
-  return actualStroops > expectedStroops;
-}
-
-/**
- * Describe the relationship between expected and actual amounts.
- *
- * Useful for log messages and diagnostics. Returns one of:
- * 'exact', 'under', 'over', 'invalid'
- */
-export function describeAmountDelta(
+export function isUnderpaid(
   expected: unknown,
   actual: unknown,
-  tolerance: number = 0
-): 'exact' | 'under' | 'over' | 'invalid' {
-  const expectedStroops = toStroops(expected);
-  const actualStroops = toStroops(actual);
+  toleranceStroops: number | bigint = 0,
+): boolean {
+  const expectedStroops = parseStroops(expected);
+  const actualStroops = parseStroops(actual);
 
   if (expectedStroops === null || actualStroops === null) {
-    return 'invalid';
+    return false;
   }
 
-  const delta = actualStroops - expectedStroops;
-
-  if (Math.abs(delta) <= tolerance) return 'exact';
-  if (delta < 0) return 'under';
-  return 'over';
+  const tol = BigInt(toleranceStroops);
+  return actualStroops < expectedStroops - tol;
 }
 
-export default {
-  compareAmounts,
-  isUnderpaid,
-  isOverpaid,
-  describeAmountDelta,
-  toStroops,
-  STROOP_DECIMALS,
-  STROOP_SCALE,
-};
+/**
+ * Determines whether the observed payment amount exceeds expected beyond the specified tolerance.
+ *
+ * @param expected - Expected invoice amount.
+ * @param actual - Observed payment amount.
+ * @param toleranceStroops - Permitted tolerance in stroops.
+ * @returns True if the payment is overpaid beyond tolerance.
+ */
+export function isOverpaid(
+  expected: unknown,
+  actual: unknown,
+  toleranceStroops: number | bigint = 0,
+): boolean {
+  const expectedStroops = parseStroops(expected);
+  const actualStroops = parseStroops(actual);
+
+  if (expectedStroops === null || actualStroops === null) {
+    return false;
+  }
+
+  const tol = BigInt(toleranceStroops);
+  return actualStroops > expectedStroops + tol;
+}
+
+/**
+ * Produces a diagnostic summary describing the difference between expected and actual amounts.
+ *
+ * @param expected - Expected invoice amount.
+ * @param actual - Observed payment amount.
+ * @returns Structured diagnostic delta.
+ */
+export function describeAmountDelta(expected: unknown, actual: unknown): AmountDelta {
+  const expectedStroops = parseStroops(expected);
+  const actualStroops = parseStroops(actual);
+
+  if (expectedStroops === null || actualStroops === null) {
+    return {
+      status: 'invalid',
+      expectedStroops,
+      actualStroops,
+      diffStroops: null,
+      diffFormatted: null,
+    };
+  }
+
+  const diff = actualStroops - expectedStroops;
+  const absDiff = diff < 0n ? -diff : diff;
+
+  let status: AmountDeltaStatus = 'exact';
+  if (diff < 0n) {
+    status = 'underpaid';
+  } else if (diff > 0n) {
+    status = 'overpaid';
+  }
+
+  return {
+    status,
+    expectedStroops,
+    actualStroops,
+    diffStroops: diff,
+    diffFormatted: formatStroops(absDiff),
+  };
+}

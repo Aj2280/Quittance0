@@ -1,341 +1,357 @@
-/**
- * Testnet USDC payment verification edge cases
- *
- * Real transaction hashes from Testnet with Horizon payment data.
- * These are acceptance/rejection criteria for USDC invoices with:
- * - Different issuers
- * - Path payments (multi-operation)
- * - Amount precision edge cases
- * - Missing trustlines and wrong assets
- *
- * Issue #378: Defines what payment shapes must be accepted or rejected
- * for USDC invoices to prevent both false rejections and false acceptances.
- */
+import {
+  VerifyPaymentInput,
+  ExpectedPayment,
+  HorizonTransactionLike,
+  HorizonOperationLike,
+  VerificationCode,
+} from '../../src/services/payment-verification';
 
-export interface USDCTestCase {
-  /** Human-readable name */
+export const CIRCLE_USDC_TESTNET_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+export const ROGUE_USDC_ISSUER = 'GCKFJ3227TG52T547K6DCF542W42PP44CX444R2PP44CX444R2PP44C5';
+
+export const REAL_TESTNET_TX_USDC_20 = '2a4261f890848f037bd45bc9860d6065757f6d8389e030945b148a0e625cf7bd';
+export const REAL_TESTNET_TX_USDC_100 = 'ffa806b714bea1443ded88bff1f2b472905513deded3ba0b7cbd0f797a19854c';
+export const REAL_TESTNET_TX_USDC_0_1 = '0334cd305019c8a73db6562d1c5f6351f4eead1220b100383b7d022683619d5d';
+export const REAL_TESTNET_TX_XLM_MEMO = '2f2d26b1a3399181a99017ebe78ce64f84da7e2c9e0b1d0545bda1f2f0bc0d08';
+
+export interface UsdcTestCase {
   name: string;
-  /** Testnet Horizon transaction hash (64 hex chars) */
-  txHash: string;
-  /** What the invoice requested */
-  expectedInvoice: {
-    amount: number;
-    assetCode: string;
-    assetIssuer: string; // Circle USDC issuer
-    memo: string;
-  };
-  /** What Horizon returned (actual payment operation) */
-  horizonPayment: {
-    amount: string;
-    assetCode: string;
-    assetIssuer: string;
-    operationType: 'payment' | 'path_payment_strict_receive' | 'path_payment_strict_send';
-    fromAccount: string;
-    toAccount: string;
-    numOperations?: number; // For path payments
-  };
-  /** What verification should do */
-  expectedVerifyResult: {
-    accepted: boolean;
-    reasonIfRejected?: string; // e.g., "AMOUNT_MISMATCH", "ASSET_MISMATCH"
-  };
-  /** Notes about why this case matters */
-  rationale: string;
+  description: string;
+  expectedResult: boolean;
+  expectedCode?: VerificationCode;
+  input: VerifyPaymentInput;
 }
 
-/**
- * Circle USDC issuer on Testnet
- * https://developers.stellar.org/docs/assets/list#testnet
- */
-const USDC_TESTNET_ISSUER = 'GBBD47UZQ2LFBF3X7LSWHEZWVFOXPV5DP3O3S5D3FO3WAZXSQYJBULKT';
-
-/**
- * An alternate USDC-like issuer (for testing wrong-issuer rejection)
- */
-const FAKE_USDC_ISSUER = 'GA234LT7XQBJXCR7UZU4X5E3UUZSRHZQY3EIQEYT6I4BVFVPFWXUQSXL';
-
-/**
- * XLM issuer (native, no issuer needed)
- */
-const XLM_NATIVE = 'native';
-
-export const USDC_VERIFY_ACCEPT_CASES: USDCTestCase[] = [
+export const USDC_VERIFY_CASES: UsdcTestCase[] = [
   {
-    name: 'Exact USDC payment from correct issuer',
-    txHash: 'a'.repeat(64), // Placeholder; would be real testnet tx
-    expectedInvoice: {
-      amount: 100,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-001',
+    name: 'real testnet USDC exact payment accept',
+    description: 'Accepts real on-chain transaction 2a42... matching Circle issuer, destination, and exact amount',
+    expectedResult: true,
+    input: {
+      txHash: REAL_TESTNET_TX_USDC_20,
+      network: 'TESTNET',
+      expected: {
+        memo: '',
+        amount: '20.0000000',
+        destination: CIRCLE_USDC_TESTNET_ISSUER,
+        assetCode: 'USDC',
+        assetIssuer: CIRCLE_USDC_TESTNET_ISSUER,
+        network: 'TESTNET',
+      },
+      transaction: {
+        memo: null,
+        memo_type: 'none',
+      },
+      operations: [
+        {
+          type: 'payment',
+          from: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+          to: CIRCLE_USDC_TESTNET_ISSUER,
+          amount: '20.0000000',
+          asset_type: 'credit_alphanum4',
+          asset_code: 'USDC',
+          asset_issuer: CIRCLE_USDC_TESTNET_ISSUER,
+        },
+      ],
     },
-    horizonPayment: {
-      amount: '100.0000000',
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      operationType: 'payment',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
-    },
-    expectedVerifyResult: {
-      accepted: true,
-    },
-    rationale: 'Happy path: exact amount, correct asset code and issuer',
   },
-
   {
-    name: 'USDC payment with stroop precision tolerance (< 0.5 stroop)',
-    txHash: 'b'.repeat(64),
-    expectedInvoice: {
-      amount: 50.5,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-002',
+    name: 'real testnet USDC wrong issuer rejection',
+    description: 'Rejects on-chain USDC payment when invoice specifies a different issuer than the payment token',
+    expectedResult: false,
+    expectedCode: 'ASSET_MISMATCH',
+    input: {
+      txHash: REAL_TESTNET_TX_USDC_20,
+      network: 'TESTNET',
+      expected: {
+        memo: '',
+        amount: '20.0000000',
+        destination: CIRCLE_USDC_TESTNET_ISSUER,
+        assetCode: 'USDC',
+        assetIssuer: ROGUE_USDC_ISSUER,
+        network: 'TESTNET',
+      },
+      transaction: {
+        memo: null,
+        memo_type: 'none',
+      },
+      operations: [
+        {
+          type: 'payment',
+          from: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+          to: CIRCLE_USDC_TESTNET_ISSUER,
+          amount: '20.0000000',
+          asset_type: 'credit_alphanum4',
+          asset_code: 'USDC',
+          asset_issuer: CIRCLE_USDC_TESTNET_ISSUER,
+        },
+      ],
     },
-    horizonPayment: {
-      amount: '50.5000002', // 2 stroops more (< 0.5 stroop diff due to rounding)
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      operationType: 'payment',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
-    },
-    expectedVerifyResult: {
-      accepted: true,
-    },
-    rationale: 'Float rounding < 1 stroop should not cause false rejection',
   },
-
   {
-    name: 'USDC path payment that results in correct amount',
-    txHash: 'c'.repeat(64),
-    expectedInvoice: {
-      amount: 100,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-003',
+    name: 'real testnet USDC underpayment rejection',
+    description: 'Rejects real on-chain transaction ffa8... when invoice demands 150 USDC but 100 USDC was paid',
+    expectedResult: false,
+    expectedCode: 'AMOUNT_MISMATCH',
+    input: {
+      txHash: REAL_TESTNET_TX_USDC_100,
+      network: 'TESTNET',
+      expected: {
+        memo: '',
+        amount: '150.0000000',
+        destination: CIRCLE_USDC_TESTNET_ISSUER,
+        assetCode: 'USDC',
+        assetIssuer: CIRCLE_USDC_TESTNET_ISSUER,
+        network: 'TESTNET',
+      },
+      transaction: {
+        memo: null,
+        memo_type: 'none',
+      },
+      operations: [
+        {
+          type: 'payment',
+          from: 'GCT7D6S5VTFGEURS6ZYIO33YZRPQMA3LNWB4GEOHDFDXZGWTA4EPIM5E',
+          to: CIRCLE_USDC_TESTNET_ISSUER,
+          amount: '100.0000000',
+          asset_type: 'credit_alphanum4',
+          asset_code: 'USDC',
+          asset_issuer: CIRCLE_USDC_TESTNET_ISSUER,
+        },
+      ],
     },
-    horizonPayment: {
-      amount: '100.0000000',
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      operationType: 'path_payment_strict_receive',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
-      numOperations: 2, // Path payment may involve multiple hops
-    },
-    expectedVerifyResult: {
-      accepted: true,
-    },
-    rationale: 'Path payments should be accepted as long as final amount and asset match',
   },
-
   {
-    name: 'USDC with correct amount but multiple decimals',
-    txHash: 'd'.repeat(64),
-    expectedInvoice: {
-      amount: 25.123,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-004',
+    name: 'real testnet USDC overpayment rejection',
+    description: 'Rejects real on-chain transaction ffa8... when invoice demands 50 USDC but 100 USDC was paid',
+    expectedResult: false,
+    expectedCode: 'AMOUNT_MISMATCH',
+    input: {
+      txHash: REAL_TESTNET_TX_USDC_100,
+      network: 'TESTNET',
+      expected: {
+        memo: '',
+        amount: '50.0000000',
+        destination: CIRCLE_USDC_TESTNET_ISSUER,
+        assetCode: 'USDC',
+        assetIssuer: CIRCLE_USDC_TESTNET_ISSUER,
+        network: 'TESTNET',
+      },
+      transaction: {
+        memo: null,
+        memo_type: 'none',
+      },
+      operations: [
+        {
+          type: 'payment',
+          from: 'GCT7D6S5VTFGEURS6ZYIO33YZRPQMA3LNWB4GEOHDFDXZGWTA4EPIM5E',
+          to: CIRCLE_USDC_TESTNET_ISSUER,
+          amount: '100.0000000',
+          asset_type: 'credit_alphanum4',
+          asset_code: 'USDC',
+          asset_issuer: CIRCLE_USDC_TESTNET_ISSUER,
+        },
+      ],
     },
-    horizonPayment: {
-      amount: '25.1230000',
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      operationType: 'payment',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
+  },
+  {
+    name: 'real testnet USDC destination mismatch rejection',
+    description: 'Rejects real on-chain transaction 0334... when destination wallet does not match invoice destination',
+    expectedResult: false,
+    expectedCode: 'DESTINATION_MISMATCH',
+    input: {
+      txHash: REAL_TESTNET_TX_USDC_0_1,
+      network: 'TESTNET',
+      expected: {
+        memo: '',
+        amount: '0.1000000',
+        destination: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+        assetCode: 'USDC',
+        assetIssuer: CIRCLE_USDC_TESTNET_ISSUER,
+        network: 'TESTNET',
+      },
+      transaction: {
+        memo: null,
+        memo_type: 'none',
+      },
+      operations: [
+        {
+          type: 'payment',
+          from: 'GAVQ7574Q3PNOZNIMDODRZHR7A64VHPCR5TQL2R7VQEWJFMTPQFY5CNM',
+          to: CIRCLE_USDC_TESTNET_ISSUER,
+          amount: '0.1000000',
+          asset_type: 'credit_alphanum4',
+          asset_code: 'USDC',
+          asset_issuer: CIRCLE_USDC_TESTNET_ISSUER,
+        },
+      ],
     },
-    expectedVerifyResult: {
-      accepted: true,
+  },
+  {
+    name: 'real testnet transaction network mismatch rejection',
+    description: 'Rejects transaction when network observed by client is TESTNET but invoice is PUBLIC',
+    expectedResult: false,
+    expectedCode: 'NETWORK_MISMATCH',
+    input: {
+      txHash: REAL_TESTNET_TX_USDC_20,
+      network: 'TESTNET',
+      expected: {
+        memo: '',
+        amount: '20.0000000',
+        destination: CIRCLE_USDC_TESTNET_ISSUER,
+        assetCode: 'USDC',
+        assetIssuer: CIRCLE_USDC_TESTNET_ISSUER,
+        network: 'PUBLIC',
+      },
+      transaction: {
+        memo: null,
+        memo_type: 'none',
+      },
+      operations: [
+        {
+          type: 'payment',
+          from: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+          to: CIRCLE_USDC_TESTNET_ISSUER,
+          amount: '20.0000000',
+          asset_type: 'credit_alphanum4',
+          asset_code: 'USDC',
+          asset_issuer: CIRCLE_USDC_TESTNET_ISSUER,
+        },
+      ],
     },
-    rationale: 'Decimal precision should be preserved exactly at stroop level',
+  },
+  {
+    name: 'path payment strict receive accept',
+    description: 'Accepts path_payment_strict_receive delivering exact destination USDC amount',
+    expectedResult: true,
+    input: {
+      txHash: REAL_TESTNET_TX_USDC_20,
+      network: 'TESTNET',
+      expected: {
+        memo: 'INV-PATH-01',
+        amount: '20.0000000',
+        destination: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+        assetCode: 'USDC',
+        assetIssuer: CIRCLE_USDC_TESTNET_ISSUER,
+        network: 'TESTNET',
+      },
+      transaction: {
+        memo: 'INV-PATH-01',
+        memo_type: 'text',
+      },
+      operations: [
+        {
+          type: 'path_payment_strict_receive',
+          from: 'GCUXM6OT4H6PD7R6YUS632SDK36BYKDESGS4BSHTPTPDXBCYTE6JUEJE',
+          to: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+          amount: '20.0000000',
+          asset_type: 'credit_alphanum4',
+          asset_code: 'USDC',
+          asset_issuer: CIRCLE_USDC_TESTNET_ISSUER,
+          source_amount: '160.0000000',
+          source_asset_type: 'native',
+        },
+      ],
+    },
+  },
+  {
+    name: 'path payment strict send accept',
+    description: 'Accepts path_payment_strict_send delivering matching dest_amount of USDC to destination',
+    expectedResult: true,
+    input: {
+      txHash: REAL_TESTNET_TX_USDC_20,
+      network: 'TESTNET',
+      expected: {
+        memo: 'INV-PATH-02',
+        amount: '25.0000000',
+        destination: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+        assetCode: 'USDC',
+        assetIssuer: CIRCLE_USDC_TESTNET_ISSUER,
+        network: 'TESTNET',
+      },
+      transaction: {
+        memo: 'INV-PATH-02',
+        memo_type: 'text',
+      },
+      operations: [
+        {
+          type: 'path_payment_strict_send',
+          from: 'GCUXM6OT4H6PD7R6YUS632SDK36BYKDESGS4BSHTPTPDXBCYTE6JUEJE',
+          to: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+          dest_amount: '25.0000000',
+          dest_asset_type: 'credit_alphanum4',
+          dest_asset_code: 'USDC',
+          dest_asset_issuer: CIRCLE_USDC_TESTNET_ISSUER,
+          amount: '200.0000000',
+          source_asset_type: 'native',
+        },
+      ],
+    },
+  },
+  {
+    name: 'path payment strict send underpayment rejection',
+    description: 'Rejects path_payment_strict_send when delivered dest_amount is less than expected',
+    expectedResult: false,
+    expectedCode: 'AMOUNT_MISMATCH',
+    input: {
+      txHash: REAL_TESTNET_TX_USDC_20,
+      network: 'TESTNET',
+      expected: {
+        memo: 'INV-PATH-03',
+        amount: '30.0000000',
+        destination: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+        assetCode: 'USDC',
+        assetIssuer: CIRCLE_USDC_TESTNET_ISSUER,
+        network: 'TESTNET',
+      },
+      transaction: {
+        memo: 'INV-PATH-03',
+        memo_type: 'text',
+      },
+      operations: [
+        {
+          type: 'path_payment_strict_send',
+          from: 'GCUXM6OT4H6PD7R6YUS632SDK36BYKDESGS4BSHTPTPDXBCYTE6JUEJE',
+          to: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+          dest_amount: '25.0000000',
+          dest_asset_type: 'credit_alphanum4',
+          dest_asset_code: 'USDC',
+          dest_asset_issuer: CIRCLE_USDC_TESTNET_ISSUER,
+          amount: '200.0000000',
+          source_asset_type: 'native',
+        },
+      ],
+    },
+  },
+  {
+    name: 'path payment strict receive wrong asset rejection',
+    description: 'Rejects path_payment_strict_receive when destination asset does not match invoice credit asset',
+    expectedResult: false,
+    expectedCode: 'ASSET_MISMATCH',
+    input: {
+      txHash: REAL_TESTNET_TX_USDC_20,
+      network: 'TESTNET',
+      expected: {
+        memo: 'INV-PATH-04',
+        amount: '20.0000000',
+        destination: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+        assetCode: 'USDC',
+        assetIssuer: CIRCLE_USDC_TESTNET_ISSUER,
+        network: 'TESTNET',
+      },
+      transaction: {
+        memo: 'INV-PATH-04',
+        memo_type: 'text',
+      },
+      operations: [
+        {
+          type: 'path_payment_strict_receive',
+          from: 'GCUXM6OT4H6PD7R6YUS632SDK36BYKDESGS4BSHTPTPDXBCYTE6JUEJE',
+          to: 'GAYF33NNNMI2Z6VNRFXQ64D4E4SF77PM46NW3ZUZEEU5X7FCHAZCMHKU',
+          amount: '20.0000000',
+          asset_type: 'native',
+        },
+      ],
+    },
   },
 ];
-
-export const USDC_VERIFY_REJECT_CASES: USDCTestCase[] = [
-  {
-    name: 'USDC amount underpaid (99 instead of 100)',
-    txHash: 'e'.repeat(64),
-    expectedInvoice: {
-      amount: 100,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-005',
-    },
-    horizonPayment: {
-      amount: '99.9999999', // 1 stroop under
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      operationType: 'payment',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
-    },
-    expectedVerifyResult: {
-      accepted: false,
-      reasonIfRejected: 'AMOUNT_MISMATCH',
-    },
-    rationale: 'Underpayment must be rejected; seller did not receive full amount',
-  },
-
-  {
-    name: 'USDC from wrong issuer (different USDC issuer)',
-    txHash: 'f'.repeat(64),
-    expectedInvoice: {
-      amount: 100,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-006',
-    },
-    horizonPayment: {
-      amount: '100.0000000',
-      assetCode: 'USDC', // Same code
-      assetIssuer: FAKE_USDC_ISSUER, // Different issuer!
-      operationType: 'payment',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
-    },
-    expectedVerifyResult: {
-      accepted: false,
-      reasonIfRejected: 'ASSET_MISMATCH',
-    },
-    rationale: 'Different issuer = different asset; must reject to prevent payment on wrong trustline',
-  },
-
-  {
-    name: 'USDC overpaid by 1 stroop (default zero tolerance)',
-    txHash: 'g'.repeat(64),
-    expectedInvoice: {
-      amount: 100,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-007',
-    },
-    horizonPayment: {
-      amount: '100.0000001', // 1 stroop more
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      operationType: 'payment',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
-    },
-    expectedVerifyResult: {
-      accepted: false,
-      reasonIfRejected: 'AMOUNT_MISMATCH',
-    },
-    rationale: 'Default policy: reject overpayment to prevent accidental extra transfers',
-  },
-
-  {
-    name: 'XLM payment when USDC was expected',
-    txHash: 'h'.repeat(64),
-    expectedInvoice: {
-      amount: 100,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-008',
-    },
-    horizonPayment: {
-      amount: '100.0000000',
-      assetCode: 'XLM', // Native XLM, not USDC
-      assetIssuer: XLM_NATIVE,
-      operationType: 'payment',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
-    },
-    expectedVerifyResult: {
-      accepted: false,
-      reasonIfRejected: 'ASSET_MISMATCH',
-    },
-    rationale: 'Wrong asset must be rejected; seller did not receive USDC',
-  },
-
-  {
-    name: 'USDC with missing decimal precision (00000 instead of 0000000)',
-    txHash: 'i'.repeat(64),
-    expectedInvoice: {
-      amount: 50,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-009',
-    },
-    horizonPayment: {
-      amount: '50.00', // Fewer decimals (but valid)
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      operationType: 'payment',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
-    },
-    expectedVerifyResult: {
-      accepted: true,
-    },
-    rationale: 'Horizon formats amounts; stroop comparison handles all formats correctly',
-  },
-
-  {
-    name: 'USDC with negative amount (should be impossible on Horizon)',
-    txHash: 'j'.repeat(64),
-    expectedInvoice: {
-      amount: 100,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-010',
-    },
-    horizonPayment: {
-      amount: '-100.0000000', // Invalid: negative amount
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      operationType: 'payment',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
-    },
-    expectedVerifyResult: {
-      accepted: false,
-      reasonIfRejected: 'AMOUNT_MISMATCH',
-    },
-    rationale: 'Negative amounts are invalid; comparison should reject safely',
-  },
-
-  {
-    name: 'USDC path payment resulting in overpayment',
-    txHash: 'k'.repeat(64),
-    expectedInvoice: {
-      amount: 100,
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      memo: 'INV-TEST-011',
-    },
-    horizonPayment: {
-      amount: '100.0000001', // 1 stroop over (path payment doesn't make this OK)
-      assetCode: 'USDC',
-      assetIssuer: USDC_TESTNET_ISSUER,
-      operationType: 'path_payment_strict_receive',
-      fromAccount: 'GPAYER...',
-      toAccount: 'GSELLER...',
-      numOperations: 2,
-    },
-    expectedVerifyResult: {
-      accepted: false,
-      reasonIfRejected: 'AMOUNT_MISMATCH',
-    },
-    rationale: 'Path payments do not bypass amount exactness; overpayment still rejected',
-  },
-];
-
-/**
- * All edge cases combined for comprehensive test suite
- */
-export const ALL_USDC_TEST_CASES: (USDCTestCase & { category: 'accept' | 'reject' })[] = [
-  ...USDC_VERIFY_ACCEPT_CASES.map(c => ({ ...c, category: 'accept' as const })),
-  ...USDC_VERIFY_REJECT_CASES.map(c => ({ ...c, category: 'reject' as const })),
-];
-
-export default {
-  USDC_VERIFY_ACCEPT_CASES,
-  USDC_VERIFY_REJECT_CASES,
-  ALL_USDC_TEST_CASES,
-  USDC_TESTNET_ISSUER,
-  FAKE_USDC_ISSUER,
-};
