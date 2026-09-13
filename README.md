@@ -126,6 +126,11 @@ invoices to `EXPIRED` before get, list, stats, verify, cancel, or monitor work.
 Expired invoices remain visible in seller history, but they are excluded from
 pending/actionable counts and cannot expose QR, pay, verify, or payment-proof
 controls. The client also projects stale pending data through `expiresAt` so a
+cached invoice stops offering payment after its deadline.
+
+The policy for exact payments that land across an expiry or cancellation
+boundary is documented in [`docs/LATE_PAYMENT_POLICY.md`](./docs/LATE_PAYMENT_POLICY.md).
+
 ### Multi-Asset (XLM & USDC) Support
 
 Quittance supports multi-asset invoicing across native XLM and credit assets such as USDC on Stellar:
