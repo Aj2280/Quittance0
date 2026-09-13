@@ -263,6 +263,10 @@ DATABASE_URL=postgresql://user:password@localhost:5432/quittance
 the single-account Horizon payment monitor; without them the server starts in
 wallet-scoped mode and the monitor stays off.
 
+The monitor polls from a durable Horizon paging token and resumes after
+restarts. Its recovery model, failure matrix, operator endpoint, and Testnet
+restart evidence are documented in [`docs/PAYMENT_MONITOR.md`](./docs/PAYMENT_MONITOR.md).
+
 ### 2) Migrate and seed
 
 ```bash
