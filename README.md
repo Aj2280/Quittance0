@@ -490,6 +490,10 @@ For a manual testnet pass with a real Freighter payment, see
 
 Reviewer pack: **[`EVIDENCE.md`](./EVIDENCE.md)** (URLs, testnet tx hashes, recording, tech note).
 
+After deployment, `cd backend && npm run evidence:smoke -- --write-evidence`
+runs the real Testnet create → pay → verify path and fills the reviewer tables;
+the required secret and public variables are listed in `EVIDENCE.md`.
+
 | Item | Status |
 |------|--------|
 | Public demo URL | Fill in `EVIDENCE.md` after deploy (D4) |
