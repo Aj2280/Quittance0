@@ -7,6 +7,7 @@ import { validateStellarConfig, SELLER_PUBLIC_KEY } from './config/stellar';
 import paymentMonitorService from './services/payment-monitor.service';
 import { configuredFrontendOrigins, corsOptions } from './config/runtime';
 import postgresInvoiceStorage from './storage/postgres-invoice-storage';
+import bodyLimitMiddleware from './middleware/body-limit';
 
 dotenv.config();
 
@@ -15,8 +16,11 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors(corsOptions()));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Body size enforcement (before json parser)
+app.use(bodyLimitMiddleware);
+
+app.use(express.json({ limit: '16kb' }));
+app.use(express.urlencoded({ extended: true, limit: '16kb' }));
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);

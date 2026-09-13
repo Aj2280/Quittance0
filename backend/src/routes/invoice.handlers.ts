@@ -22,6 +22,13 @@ import {
 import { PaymentClaimError } from '../domain/payment-attribution';
 import { cutoverDrainMode, simulationAllowed } from '../config/runtime';
 import { createRequestId } from '../utils/request-correlation-id';
+import { checkInvoiceVerifyLimit } from '../middleware/rate-limit';
+import { cacheVerificationResult } from '../middleware/verify-cache';
+import {
+  verifyCancelSignature,
+  signatureVerificationRequired,
+  extractCancelSignature,
+} from '../utils/signature-verification';
 
 /** Kept explicit so clients can tune polling without duplicating backend policy. */
 export const PAYMENT_STATUS_POLL_INTERVAL_MS = 3000;
@@ -217,18 +224,51 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
       try {
         let sellerPublicKey: string | undefined;
 
-        if (req.body && typeof req.body === 'object' && 'sellerPublicKey' in req.body) {
-          const parsed = cancelInvoiceSchema.safeParse(req.body);
-          if (!parsed.success) {
-            return sendFailure(res, 400, 'Invalid Stellar public key format');
+        // Check for signature-based authentication (preferred)
+        const signaturePayload = extractCancelSignature(req.body);
+        
+        if (signaturePayload) {
+          // Verify the cryptographic signature
+          const verification = verifyCancelSignature(signaturePayload);
+          
+          if (!verification.valid) {
+            return sendFailure(res, 401, verification.error || 'Invalid signature');
           }
-          sellerPublicKey = parsed.data.sellerPublicKey;
-        } else if (req.query.sellerPublicKey) {
-          const parsed = stellarPublicKeySchema.safeParse(req.query.sellerPublicKey);
-          if (!parsed.success) {
-            return sendFailure(res, 400, 'Invalid Stellar public key format');
+          
+          sellerPublicKey = signaturePayload.sellerPublicKey;
+        } else {
+          // Legacy path: require signature in production, allow fallback in dev
+          if (signatureVerificationRequired()) {
+            return sendFailure(
+              res,
+              401,
+              'Signature required: cancellation requires cryptographic proof of ownership'
+            );
           }
-          sellerPublicKey = parsed.data;
+
+          // Fallback to claimed key (legacy, insecure)
+          if (req.body && typeof req.body === 'object' && 'sellerPublicKey' in req.body) {
+            const parsed = cancelInvoiceSchema.safeParse(req.body);
+            if (!parsed.success) {
+              return sendFailure(res, 400, 'Invalid Stellar public key format');
+            }
+            sellerPublicKey = parsed.data.sellerPublicKey;
+          } else if (req.query.sellerPublicKey) {
+            const parsed = stellarPublicKeySchema.safeParse(req.query.sellerPublicKey);
+            if (!parsed.success) {
+              return sendFailure(res, 400, 'Invalid Stellar public key format');
+            }
+            sellerPublicKey = parsed.data;
+          }
+        }
+
+        // Require explicit ownership proof (no more unauthenticated cancellation)
+        if (!sellerPublicKey) {
+          return sendFailure(
+            res,
+            401,
+            'Unauthorized: sellerPublicKey is required to cancel an invoice'
+          );
         }
 
         const invoice = await storage.cancelInvoice(req.params.id, sellerPublicKey);
@@ -237,7 +277,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         logError('Cancel invoice error:', error);
         const message = error.message || 'Failed to cancel invoice';
         const isUnauthorized = message.toLowerCase().includes('unauthorized');
-        sendFailure(res, isUnauthorized ? 403 : 400, message);
+        sendFailure(res, isUnauthorized ? 401 : 400, message);
       }
     },
 
@@ -245,6 +285,18 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
       try {
         const { id } = req.params;
         const { network } = req.body || {};
+
+        // Per-invoice rate limit check (prevents Horizon amplification)
+        const invoiceLimit = await checkInvoiceVerifyLimit(id);
+        if (!invoiceLimit.allowed) {
+          res.set('Retry-After', (invoiceLimit.retryAfter || 60).toString());
+          return sendVerificationFailure(
+            res,
+            429,
+            'VERIFY_RATE_LIMIT_EXCEEDED',
+            'Too many verification attempts for this invoice'
+          );
+        }
 
         const hashCheck = checkTxHash(req.body?.txHash);
         if (!hashCheck.ok) {
@@ -273,6 +325,8 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         } catch (error: any) {
           logError('Verify payment lookup error:', error);
           const notFound = failure('TRANSACTION_NOT_FOUND');
+          // Cache the rejection to prevent repeated Horizon lookups for invalid hashes
+          await cacheVerificationResult(id, hashCheck.value, 'rejected', notFound.code);
           return sendVerificationFailure(res, 404, notFound.code, notFound.error);
         }
 
@@ -292,6 +346,8 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         });
 
         if (!verification.ok) {
+          // Cache verification failures to prevent repeated attempts
+          await cacheVerificationResult(id, hashCheck.value, 'rejected', verification.code);
           return sendVerificationFailure(res, 400, verification.code, verification.error);
         }
 
@@ -303,6 +359,9 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
             verification.value.from,
             payerCheck.value
           );
+          
+          // Cache successful verification
+          await cacheVerificationResult(id, hashCheck.value, 'verified');
         } catch (error) {
           if (error instanceof PaymentClaimError) {
             // A transaction that already settled another invoice must not settle

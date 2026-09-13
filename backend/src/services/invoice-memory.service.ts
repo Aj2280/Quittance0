@@ -143,18 +143,8 @@ export class InvoiceMemoryService {
     return [this.storage.getStats(sellerPublicKey)];
   }
 
-  /**
-   * Logs a payment lifecycle event for audit tracking.
-   */
-  async logPaymentEvent(invoiceId: string, eventType: string, eventData: any): Promise<void> {
-    this.storage.logPaymentEvent(invoiceId, eventType, eventData);
-  }
-
-  /**
-   * Retrieves logged payment events for an invoice or all invoices.
-   */
-  async getPaymentEvents(invoiceId?: string): Promise<MemoryPaymentEvent[]> {
-    return this.storage.getPaymentEvents(invoiceId);
+  async getInvoiceCount(): Promise<number> {
+    return this.storage.getInvoiceCount();
   }
 }
 
