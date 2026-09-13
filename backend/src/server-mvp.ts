@@ -20,8 +20,8 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors(corsOptions()));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '16kb' }));
+app.use(express.urlencoded({ extended: true, limit: '16kb' }));
 
 // Request logging
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -65,6 +65,13 @@ app.get('/api/stellar/account', (req: Request, res: Response) => {
 
 // Error handling middleware
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  if ((err as any).type === 'entity.too.large' || (err as any).status === 413 || (err as any).statusCode === 413) {
+    return res.status(413).json({
+      success: false,
+      code: 'PAYLOAD_TOO_LARGE',
+      error: 'Payload too large: request body exceeds 16 kB limit',
+    });
+  }
   console.error('Unhandled error:', err);
   const code = (err as Error & { code?: string }).code;
   // Keep the shared failure envelope: `success:false` with an optional stable

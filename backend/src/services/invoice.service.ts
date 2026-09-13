@@ -341,6 +341,11 @@ export class InvoiceService {
       metadata: row.metadata,
     };
   }
+
+  async countInvoices(): Promise<number> {
+    const res = await this.db.query('SELECT COUNT(*) as count FROM invoices');
+    return parseInt(res.rows[0]?.count || '0', 10);
+  }
 }
 
 export default new InvoiceService();

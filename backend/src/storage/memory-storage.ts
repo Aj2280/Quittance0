@@ -178,6 +178,10 @@ class MemoryStorage {
   size(): number {
     return this.invoices.size;
   }
+
+  countInvoices(): number {
+    return this.invoices.size;
+  }
 }
 
 export { MemoryStorage };

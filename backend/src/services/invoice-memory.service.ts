@@ -142,6 +142,10 @@ export class InvoiceMemoryService {
   async getInvoiceStats(sellerPublicKey: string): Promise<InvoiceStats[]> {
     return [this.storage.getStats(sellerPublicKey)];
   }
+
+  async countInvoices(): Promise<number> {
+    return this.storage.countInvoices();
+  }
 }
 
 export default new InvoiceMemoryService();
