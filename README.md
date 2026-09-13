@@ -422,6 +422,10 @@ how settlement compares them is documented in
 [`docs/ASSETS.md`](./docs/ASSETS.md) and [`docs/VERIFY.md`](./docs/VERIFY.md).
 The current SEP-0007 field map, wallet test vectors, memo byte limit, and
 Testnet recommendation are in [`docs/SEP_0007_QR.md`](./docs/SEP_0007_QR.md).
+Freighter mobile feasibility, device/browser compatibility matrix, non-custodial
+fallback UX without Google login, and demonstration instructions are in
+[`docs/MOBILE_PAY_FEASIBILITY.md`](./docs/MOBILE_PAY_FEASIBILITY.md) and
+[`docs/MOBILE_DEMO_SCRIPT.md`](./docs/MOBILE_DEMO_SCRIPT.md).
 
 ## Tests & CI
 

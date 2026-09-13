@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -14,6 +15,7 @@ import QRCodeDisplay from '@/components/QRCodeDisplay';
 import PaymentButton from '@/components/PaymentButton';
 import WalletConnect from '@/components/WalletConnect';
 import FreighterInstallPrompt from '@/components/FreighterInstallPrompt';
+import MobilePaymentFallback from '@/components/MobilePaymentFallback';
 import ApiErrorState from '@/components/ApiErrorState';
 import { copyToClipboard, formatAmount } from '@/lib/utils';
 import { openInvoicePDF, shareInvoiceByEmail } from '@/lib/export';
@@ -25,11 +27,18 @@ import { usePaymentPage } from '@/lib/use-payment-page';
 import { MAIN_CONTENT_ID, describeAmount, statusText } from '@/lib/a11y';
 import { useWalletStore } from '@/lib/store';
 import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
+import { detectDevice } from '@/lib/mobile-detection';
 
 export default function PaymentPage() {
   const id = useParams().id as string;
   const page = usePaymentPage(id);
   const walletSession = useWalletStore();
+  const [isMobile, setIsMobile] = useState(false);
+  const [showDesktopWalletAnyway, setShowDesktopWalletAnyway] = useState(false);
+
+  useEffect(() => {
+    setIsMobile(detectDevice().isMobile);
+  }, []);
 
   if (page.loading) {
     return (
@@ -204,54 +213,93 @@ export default function PaymentPage() {
                       Scan with your Stellar wallet app to pay instantly
                     </p>
                   </section>
-                  <section aria-labelledby="wallet-pay-title" className="card">
-                    <h3 id="wallet-pay-title" className="text-xl font-semibold text-center mb-4">
-                      Pay with Wallet
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-                      <PayerField
-                        id="payer-name"
-                        label="Your name (optional)"
-                        value={page.payerName}
-                        onChange={page.setPayerName}
+                  {isMobile && !showDesktopWalletAnyway ? (
+                    <div className="space-y-4">
+                      <MobilePaymentFallback
+                        destination={invoice.sellerPublicKey}
+                        amount={String(invoice.amount)}
+                        assetCode={invoice.assetCode}
+                        assetIssuer={invoice.assetIssuer}
+                        memo={invoice.memo}
+                        paymentUrl={
+                          page.paymentInfo?.paymentUrl ||
+                          (typeof window !== 'undefined' ? window.location.href : '')
+                        }
+                        onCopy={(text, label) => {
+                          page.dispatch({ type: 'COPIED', key: label });
+                        }}
                       />
-                      <PayerField
-                        id="payer-email"
-                        label="Your email (optional)"
-                        value={page.payerEmail}
-                        onChange={page.setPayerEmail}
-                        type="email"
-                      />
+                      <div className="text-center">
+                        <button
+                          type="button"
+                          onClick={() => setShowDesktopWalletAnyway(true)}
+                          className="text-xs text-gray-500 hover:text-gray-700 underline"
+                        >
+                          Show desktop extension controls
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex justify-center mb-4">
-                      <WalletConnect />
-                    </div>
-                    {!walletPaymentGate.ready && walletPaymentGate.action !== 'none' && (
-                      <FreighterInstallPrompt
-                        gate={walletPaymentGate}
-                        action={<WalletConnect />}
-                        compact
-                        className="mb-4"
+                  ) : (
+                    <section aria-labelledby="wallet-pay-title" className="card">
+                      <h3 id="wallet-pay-title" className="text-xl font-semibold text-center mb-4">
+                        Pay with Wallet
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                        <PayerField
+                          id="payer-name"
+                          label="Your name (optional)"
+                          value={page.payerName}
+                          onChange={page.setPayerName}
+                        />
+                        <PayerField
+                          id="payer-email"
+                          label="Your email (optional)"
+                          value={page.payerEmail}
+                          onChange={page.setPayerEmail}
+                          type="email"
+                        />
+                      </div>
+                      <div className="flex justify-center mb-4">
+                        <WalletConnect />
+                      </div>
+                      {!walletPaymentGate.ready && walletPaymentGate.action !== 'none' && (
+                        <FreighterInstallPrompt
+                          gate={walletPaymentGate}
+                          action={<WalletConnect />}
+                          compact
+                          className="mb-4"
+                        />
+                      )}
+                      <PaymentButton
+                        destination={invoice.sellerPublicKey}
+                        amount={String(invoice.amount)}
+                        memo={invoice.memo}
+                        assetCode={invoice.assetCode}
+                        assetIssuer={invoice.assetIssuer}
+                        invoiceId={invoice.id}
+                        payerName={page.payerName}
+                        payerEmail={page.payerEmail}
+                        invoiceStatus={view.expired ? 'EXPIRED' : invoice.status}
+                        onStart={() => page.dispatch({ type: 'PAY_STARTED' })}
+                        onSuccess={(txHash) => {
+                          page.dispatch({ type: 'PAY_SENT', txHash });
+                          void page.reload();
+                        }}
+                        onError={(error) => page.dispatch({ type: 'PAY_FAILED', error })}
                       />
-                    )}
-                    <PaymentButton
-                      destination={invoice.sellerPublicKey}
-                      amount={String(invoice.amount)}
-                      memo={invoice.memo}
-                      assetCode={invoice.assetCode}
-                      assetIssuer={invoice.assetIssuer}
-                      invoiceId={invoice.id}
-                      payerName={page.payerName}
-                      payerEmail={page.payerEmail}
-                      invoiceStatus={view.expired ? 'EXPIRED' : invoice.status}
-                      onStart={() => page.dispatch({ type: 'PAY_STARTED' })}
-                      onSuccess={(txHash) => {
-                        page.dispatch({ type: 'PAY_SENT', txHash });
-                        void page.reload();
-                      }}
-                      onError={(error) => page.dispatch({ type: 'PAY_FAILED', error })}
-                    />
-                  </section>
+                      {isMobile && showDesktopWalletAnyway && (
+                        <div className="mt-4 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setShowDesktopWalletAnyway(false)}
+                            className="text-xs text-gray-500 hover:text-gray-700 underline"
+                          >
+                            Return to mobile guidance
+                          </button>
+                        </div>
+                      )}
+                    </section>
+                  )}
                   <PayMonitorPanel
                     active={page.monitoring}
                     intervalMs={
