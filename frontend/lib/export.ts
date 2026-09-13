@@ -14,6 +14,16 @@ import {
   openProofMailto,
 } from './mailto-delivery.js';
 
+import {
+  buildQuittanceProof,
+  createQuittanceProofPdf,
+  isQuittanceProof,
+  renderQuittanceProofHtml,
+  type QuittanceProof,
+  type QuittanceProofResult,
+  QUITTANCE_PROOF_VERSION,
+} from './quittance-proof';
+
 export {
   assertPaymentProofAvailable,
   canExportPaymentProof,
@@ -25,7 +35,13 @@ export {
   getProofMailtoRecipient,
   openInvoiceMailto,
   openProofMailto,
+  buildQuittanceProof,
+  createQuittanceProofPdf,
+  isQuittanceProof,
+  renderQuittanceProofHtml,
+  QUITTANCE_PROOF_VERSION,
 };
+export type { QuittanceProof, QuittanceProofResult };
 
 const HTML_ESCAPE_CHARACTERS: Record<string, string> = {
   '&': '&amp;',
@@ -125,7 +141,17 @@ export function downloadInvoiceCSV(invoices: Invoice[], filename?: string) {
   URL.revokeObjectURL(url);
 }
 
-export function generateInvoicePDF(invoice: Invoice): string {
+/**
+ * Generate print-ready HTML for an invoice or canonical quittance proof.
+ *
+ * @param invoiceOrProof - Invoice record or canonical QuittanceProof model.
+ * @returns HTML document string for display or PDF printing.
+ */
+export function generateInvoicePDF(invoiceOrProof: Invoice | QuittanceProof): string {
+  if (isQuittanceProof(invoiceOrProof)) {
+    return renderQuittanceProofHtml(invoiceOrProof);
+  }
+  const invoice = invoiceOrProof;
   assertPaymentProofAvailable(invoice);
   const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK === 'TESTNET' ? 'Testnet' : 'Mainnet';
   const isPaid = invoice.status === 'PAID';
@@ -368,16 +394,27 @@ export function generateInvoicePDF(invoice: Invoice): string {
 </html>`;
 }
 
-export function openInvoicePDF(invoice: Invoice) {
-  const pdfContent = generateInvoicePDF(invoice);
-  
-  // Open in new window for PDF printing
+/**
+ * Generate print-ready HTML for a canonical quittance proof document.
+ *
+ * @param proof - Canonical quittance proof model.
+ * @returns HTML document string for display or PDF printing.
+ */
+export function generateQuittanceProofPDF(proof: QuittanceProof): string {
+  return renderQuittanceProofHtml(proof);
+}
+
+/**
+ * Open invoice or canonical proof in a new window to trigger the system print dialog.
+ *
+ * @param invoiceOrProof - Invoice record or canonical QuittanceProof model.
+ */
+export function openInvoicePDF(invoiceOrProof: Invoice | QuittanceProof) {
+  const pdfContent = generateInvoicePDF(invoiceOrProof);
   const printWindow = window.open('', '_blank', 'width=800,height=600');
   if (printWindow) {
     printWindow.document.write(pdfContent);
     printWindow.document.close();
-    
-    // Auto-trigger print dialog after content loads
     printWindow.onload = () => {
       setTimeout(() => {
         printWindow.print();

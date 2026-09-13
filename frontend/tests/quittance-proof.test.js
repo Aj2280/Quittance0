@@ -1,12 +1,25 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { jsPDF } = require('jspdf');
+
 const {
   buildQuittanceProof,
   serializeQuittanceProof,
   parseQuittanceProof,
   checkQuittanceProofInvariants,
+  isQuittanceProof,
+  renderQuittanceProofHtml,
+  createQuittanceProofPdf,
   QUITTANCE_PROOF_VERSION,
 } = require('../lib/quittance-proof.ts');
+
+const {
+  generateInvoicePDF,
+  generateQuittanceProofPDF,
+} = require('../lib/export.ts');
+
 const {
   NETWORK,
   TX_HASH,
@@ -14,6 +27,8 @@ const {
   paidInvoice,
   pendingInvoice,
   goldenProofJson,
+  goldenProofHtml,
+  goldenProofPdfBuffer,
 } = require('./fixtures/quittance-proof.fixture');
 
 function build(input, options = {}) {
@@ -150,4 +165,50 @@ test('detects invariant violations in a hand-edited document', () => {
   assert.deepEqual(checkQuittanceProofInvariants(localTime), ['UTC_TIMESTAMPS']);
 
   assert.deepEqual(checkQuittanceProofInvariants('{'), ['NOT_JSON']);
+});
+
+test('renders the golden HTML document for the fixture proof', () => {
+  const proof = build(paidInvoice);
+  const renderedHtml = renderQuittanceProofHtml(proof);
+  assert.equal(renderedHtml, goldenProofHtml);
+});
+
+test('produces byte-for-byte deterministic PDF matching the golden PDF fixture', () => {
+  const proof = build(paidInvoice);
+  const doc = createQuittanceProofPdf(proof, jsPDF);
+  const generatedBuffer = Buffer.from(doc.output('arraybuffer'));
+  assert.equal(generatedBuffer.equals(goldenProofPdfBuffer), true);
+});
+
+test('verifies HTML rendering enforces anti-leak and invariant constraints', () => {
+  const proof = build(paidInvoice);
+  const html = renderQuittanceProofHtml(proof);
+
+  assert.equal(/S[A-Z2-7]{55}/.test(html), false);
+  assert.equal(/[^\s@]+@[^\s@]+\.[^\s@]+/.test(html), false);
+  assert.ok(html.includes('quittance.v1'));
+  assert.ok(html.includes('250.5000000 USDC'));
+  assert.ok(html.includes('2026-09-13T09:21:44.000Z'));
+  assert.ok(html.includes('2026-09-13T12:00:00.000Z'));
+  assert.ok(html.includes('inv_8Qm2'));
+});
+
+test('type guard correctly identifies quittance proofs vs raw invoice objects', () => {
+  const proof = build(paidInvoice);
+  assert.equal(isQuittanceProof(proof), true);
+  assert.equal(isQuittanceProof(paidInvoice), false);
+  assert.equal(isQuittanceProof(null), false);
+  assert.equal(isQuittanceProof({}), false);
+  assert.equal(isQuittanceProof({ schemaVersion: 'quittance.v0' }), false);
+});
+
+test('generateInvoicePDF delegates directly to renderQuittanceProofHtml for QuittanceProof', () => {
+  const proof = build(paidInvoice);
+  const fromExport = generateInvoicePDF(proof);
+  const fromProof = renderQuittanceProofHtml(proof);
+  const fromQuittancePdf = generateQuittanceProofPDF(proof);
+
+  assert.equal(fromExport, fromProof);
+  assert.equal(fromQuittancePdf, fromProof);
+  assert.equal(fromExport, goldenProofHtml);
 });
