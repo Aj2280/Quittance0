@@ -251,6 +251,9 @@ Use this path when invoices must survive a backend restart. Identity is still th
 connected Freighter wallet: every invoice is stored under its `seller_public_key`,
 and list/stats endpoints only return the requesting wallet's invoices.
 
+For a live move from the MVP without changing existing `/pay/[id]` links or
+payment proofs, follow the [in-memory to Postgres cutover plan](./docs/POSTGRES_CUTOVER.md).
+
 ### 1) Point the backend at a database
 
 In `backend/.env` (template: `backend/env.example.txt`):
