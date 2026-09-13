@@ -38,6 +38,53 @@ after deploying; do not submit the pack while a required slot remains.
 
 After a successful pay, copy the hash from the receipt or Freighter history.
 
+### Automated Testnet smoke pack
+
+The backend package includes one command that performs the reviewer path
+against a deployed API: health → readiness → create invoice → submit a real
+Testnet XLM payment → verify → read back `PAID` → write a JSON artifact.
+
+Required environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `EVIDENCE_API_URL` | Deployed HTTPS API URL ending in `/api` |
+| `EVIDENCE_SELLER_PUBLIC_KEY` | Existing, funded Testnet recipient account |
+| `EVIDENCE_PAYER_SECRET` | Existing, funded Testnet payer secret; never written to output |
+
+These are required when `--write-evidence` updates this file:
+
+| Variable | Purpose |
+|---|---|
+| `EVIDENCE_FRONTEND_URL` | Public reviewer frontend URL |
+| `EVIDENCE_SOURCE_REVISION` | Commit deployed to frontend and API |
+
+Optional variables are `EVIDENCE_AMOUNT` (default `0.1000000` XLM),
+`EVIDENCE_HORIZON_URL`, and `EVIDENCE_OUTPUT` (default
+`../artifacts/evidence-smoke.json` from the backend directory).
+
+Configure the values in a local secret manager or ephemeral shell, then run:
+
+```bash
+cd backend
+npm run evidence:smoke
+npm run evidence:smoke -- --write-evidence
+```
+
+The script is Testnet-only and never calls Friendbot. Fund the two distinct
+accounts manually, keep the payer secret out of shell history and git, and
+rotate it after the evidence run if it is a disposable account. Generated
+artifacts are ignored by git.
+
+The JSON artifact must contain:
+
+- [ ] API, health, readiness, frontend, source revision, network, and capture time
+- [ ] Invoice ID, exact XLM amount, memo, and seller/payer public keys
+- [ ] 64-character transaction hash and Testnet Stellar Expert URL
+- [ ] `createdPending`, `paymentSubmitted`, `verifiedPaid`, and `rereadPaid` checks
+- [ ] `simulationDisabled: true` and final status `PAID`
+- [ ] no payer secret, auth token, cookie, or secret key
+
 ---
 
 ## Screen recording
