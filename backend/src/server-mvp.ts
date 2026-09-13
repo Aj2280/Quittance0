@@ -10,6 +10,7 @@ import { createInvoiceRouter } from './routes/invoice.routes';
 import memoryInvoiceStorage from './storage/memory-invoice-storage';
 import { configuredFrontendOrigins, corsOptions } from './config/runtime';
 import { healthHandler, readinessHandler } from './health';
+import bodyLimitMiddleware from './middleware/body-limit';
 
 // Load environment variables
 dotenv.config();
@@ -20,8 +21,11 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors(corsOptions()));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Body size enforcement (before json parser)
+app.use(bodyLimitMiddleware);
+
+app.use(express.json({ limit: '16kb' }));
+app.use(express.urlencoded({ extended: true, limit: '16kb' }));
 
 // Request logging
 app.use((req: Request, res: Response, next: NextFunction) => {
