@@ -4,7 +4,11 @@
  */
 
 const { assertPaymentProofAvailable, canExportPaymentProof } = require('./payment-proof-policy.js');
-const { buildHorizonTxUrl, resolveExplorerNetwork } = require('./explorer-tx-link.js');
+const { buildHorizonTxUrl } = require('./explorer-tx-link.js');
+
+// Same default as lib/stellar.ts: without NEXT_PUBLIC_STELLAR_NETWORK the app
+// talks to testnet, so explorer links must point there too.
+const DEFAULT_STELLAR_NETWORK = 'TESTNET';
 
 function isValidEmailFormat(email) {
   if (typeof email !== 'string') return false;
@@ -54,13 +58,15 @@ function getProofMailtoRecipient(invoice) {
 
 /**
  * Explorer network for an invoice: the invoice's own network wins, then the
- * app-level configuration, then public.
+ * app configuration, then the app default (TESTNET, as in lib/stellar.ts).
  */
 function resolveInvoiceNetwork(invoice) {
-  const configured = invoice && invoice.network
-    ? invoice.network
-    : (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_STELLAR_NETWORK);
-  return resolveExplorerNetwork(configured);
+  const configured =
+    (invoice && invoice.network) ||
+    (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_STELLAR_NETWORK) ||
+    DEFAULT_STELLAR_NETWORK;
+  const normalized = String(configured).trim().toUpperCase();
+  return normalized === 'PUBLIC' || normalized === 'MAINNET' ? 'public' : 'testnet';
 }
 
 function buildInvoiceMailto(invoice, baseUrl) {

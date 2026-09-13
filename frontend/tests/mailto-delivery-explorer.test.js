@@ -18,63 +18,87 @@ const baseInvoice = {
   paymentTxHash: TX_HASH,
 };
 
-function decodeBody(mailto) {
-  const bodyPart = mailto.split('&body=')[1];
-  return decodeURIComponent(bodyPart);
+const PUBLIC_URL = `https://stellar.expert/explorer/public/tx/${TX_HASH}`;
+const TESTNET_URL = `https://stellar.expert/explorer/testnet/tx/${TX_HASH}`;
+
+function bodyOf(mailto) {
+  return decodeURIComponent(mailto.split('&body=')[1]);
 }
 
-test('paid proof carries the transaction hash and the public explorer link', () => {
-  const mailto = buildProofMailto({ ...baseInvoice, network: 'PUBLIC' }, 'https://quittance.example.com');
+function withEnv(value, run) {
+  const previous = process.env.NEXT_PUBLIC_STELLAR_NETWORK;
+  if (value === undefined) {
+    delete process.env.NEXT_PUBLIC_STELLAR_NETWORK;
+  } else {
+    process.env.NEXT_PUBLIC_STELLAR_NETWORK = value;
+  }
+  try {
+    return run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.NEXT_PUBLIC_STELLAR_NETWORK;
+    } else {
+      process.env.NEXT_PUBLIC_STELLAR_NETWORK = previous;
+    }
+  }
+}
 
-  assert.ok(mailto.includes(encodeURIComponent(`Transaction Hash: ${TX_HASH}`)));
-  assert.ok(
-    mailto.includes(
-      encodeURIComponent(`Explorer: https://stellar.expert/explorer/public/tx/${TX_HASH}`)
-    )
-  );
+test('an invoice without a network falls back to the app default (testnet)', () => {
+  const body = withEnv(undefined, () => bodyOf(buildProofMailto({ ...baseInvoice })));
+
+  assert.ok(body.includes(`Explorer: ${TESTNET_URL}`));
+  assert.ok(!body.includes(PUBLIC_URL));
 });
 
-test('testnet invoices get the testnet explorer link', () => {
-  const mailto = buildProofMailto({ ...baseInvoice, network: 'TESTNET' }, 'https://quittance.example.com');
+test('the app network configuration decides when the invoice has none', () => {
+  const publicBody = withEnv('PUBLIC', () => bodyOf(buildProofMailto({ ...baseInvoice })));
+  assert.ok(publicBody.includes(`Explorer: ${PUBLIC_URL}`));
 
-  assert.ok(
-    mailto.includes(
-      encodeURIComponent(`Explorer: https://stellar.expert/explorer/testnet/tx/${TX_HASH}`)
-    )
+  const testnetBody = withEnv('TESTNET', () => bodyOf(buildProofMailto({ ...baseInvoice })));
+  assert.ok(testnetBody.includes(`Explorer: ${TESTNET_URL}`));
+
+  const mainnetBody = withEnv('MAINNET', () => bodyOf(buildProofMailto({ ...baseInvoice })));
+  assert.ok(mainnetBody.includes(`Explorer: ${PUBLIC_URL}`));
+});
+
+test("an invoice's own network wins over the app configuration", () => {
+  const body = withEnv('TESTNET', () =>
+    bodyOf(buildProofMailto({ ...baseInvoice, network: 'PUBLIC' }))
   );
-  assert.ok(!mailto.includes(encodeURIComponent('https://stellar.expert/explorer/public/tx')));
+
+  assert.ok(body.includes(`Explorer: ${PUBLIC_URL}`));
+  assert.ok(!body.includes(TESTNET_URL));
+});
+
+test('the mailto carries the transaction hash next to the explorer link', () => {
+  const body = withEnv('TESTNET', () => bodyOf(buildProofMailto({ ...baseInvoice })));
+
+  assert.ok(body.includes(`Transaction Hash: ${TX_HASH}`));
+  assert.ok(body.includes(`Explorer: ${TESTNET_URL}`));
 });
 
 test('a malformed or missing hash adds no explorer link and does not throw', () => {
-  const shortHash = buildProofMailto(
-    { ...baseInvoice, paymentTxHash: 'deadbeef' },
-    'https://quittance.example.com'
+  const shortHash = withEnv('TESTNET', () =>
+    bodyOf(buildProofMailto({ ...baseInvoice, paymentTxHash: 'deadbeef' }))
   );
-  assert.ok(!decodeBody(shortHash).includes('Explorer:')); 
+  assert.ok(!shortHash.includes('Explorer:'));
 
-  const noHash = buildProofMailto(
-    { ...baseInvoice, paymentTxHash: undefined },
-    'https://quittance.example.com'
+  const noHash = withEnv('TESTNET', () =>
+    bodyOf(buildProofMailto({ ...baseInvoice, paymentTxHash: undefined }))
   );
-  const body = decodeBody(noHash);
-  assert.ok(!body.includes('Explorer:'));
-  assert.ok(!body.includes('Transaction Hash:'));
+  assert.ok(!noHash.includes('Explorer:'));
+  assert.ok(!noHash.includes('Transaction Hash:'));
 });
 
 test('special characters in the body survive the mailto round trip', () => {
   const memo = 'INV & co? = 100% #tag/é';
-  const description = 'Deposit 50% upfront';
-  const mailto = buildProofMailto(
-    { ...baseInvoice, memo, description, network: 'PUBLIC' },
-    'https://quittance.example.com'
+  const mailto = withEnv('TESTNET', () =>
+    buildProofMailto({ ...baseInvoice, memo })
   );
 
   // Two separators only: everything user-supplied is percent-encoded.
   assert.equal(mailto.split('&').length, 2);
-
-  const body = decodeBody(mailto);
-  assert.ok(body.includes(`Memo: ${memo}`));
-  assert.ok(body.includes(`Explorer: https://stellar.expert/explorer/public/tx/${TX_HASH}`));
+  assert.ok(bodyOf(mailto).includes(`Memo: ${memo}`));
 });
 
 test('unpaid invoices and missing recipients stay unavailable', () => {
