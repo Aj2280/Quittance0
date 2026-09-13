@@ -20,7 +20,7 @@ import {
   verifyHorizonPayment,
 } from '../services/payment-verification';
 import { PaymentClaimError } from '../domain/payment-attribution';
-import { simulationAllowed } from '../config/runtime';
+import { cutoverDrainMode, simulationAllowed } from '../config/runtime';
 import { createRequestId } from '../utils/request-correlation-id';
 import { checkInvoiceVerifyLimit } from '../middleware/rate-limit';
 import { cacheVerificationResult } from '../middleware/verify-cache';
@@ -120,6 +120,13 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
 
   return {
     async createInvoice(req: Request, res: Response) {
+      if (cutoverDrainMode()) {
+        return sendFailure(
+          res,
+          503,
+          'System is in cutover drain mode. New invoice creation is temporarily paused.'
+        );
+      }
       const requestId = createRequestId();
       try {
         const validatedData = createInvoiceSchema.parse(req.body);
@@ -207,6 +214,13 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
     },
 
     async cancelInvoice(req: Request, res: Response) {
+      if (cutoverDrainMode()) {
+        return sendFailure(
+          res,
+          503,
+          'System is in cutover drain mode. Invoice cancellation is temporarily paused.'
+        );
+      }
       try {
         let sellerPublicKey: string | undefined;
 
@@ -399,6 +413,13 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
 
     // Local testing only — hidden unless ALLOW_SIMULATE=true.
     async simulatePayment(req: Request, res: Response) {
+      if (cutoverDrainMode()) {
+        return sendFailure(
+          res,
+          503,
+          'System is in cutover drain mode. Payment simulation is temporarily paused.'
+        );
+      }
       try {
         if (!simulateAllowed()) {
           return sendFailure(res, 404, 'Endpoint not found');

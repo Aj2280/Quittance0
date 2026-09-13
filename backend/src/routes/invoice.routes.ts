@@ -17,6 +17,8 @@ import invoiceCeilingMiddleware from '../middleware/invoice-ceiling';
  *   POST   /invoices/:id/cancel (seller authorized)
  *   POST   /invoices/:id/verify
  *   POST   /invoices/:id/simulate-payment
+ *   GET    /invoices/:id/quittance-proof (canonical JSON proof)
+ *   GET    /invoices/:id/quittance-proof.pdf (PDF-ready HTML)
  * If a route is added here, wire it into the same shared handlers so parity
  * tests in invoice-handlers.test.ts cover both storage backends.
  */

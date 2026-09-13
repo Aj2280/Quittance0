@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Proof #inv_8Qm2 - Quittance</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 15mm;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #111827;
+      background-color: #f9fafb;
+      padding: 24px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .proof-container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 32px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid #0284c7;
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+    }
+    .brand {
+      font-size: 26px;
+      font-weight: 800;
+      color: #0284c7;
+      letter-spacing: -0.025em;
+    }
+    .schema-version {
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-paid {
+      background: #dcfce7;
+      color: #15803d;
+    }
+    .badge-pending {
+      background: #fef9c3;
+      color: #854d0e;
+    }
+    .badge-other {
+      background: #f3f4f6;
+      color: #4b5563;
+    }
+    .network-badge {
+      font-size: 11px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      margin-top: 6px;
+      text-align: right;
+    }
+    .amount-card {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .amount-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #166534;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+    .amount-figure {
+      font-size: 30px;
+      font-weight: 800;
+      color: #14532d;
+    }
+    .asset-issuer {
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #15803d;
+      margin-top: 4px;
+    }
+    .section {
+      margin-bottom: 24px;
+    }
+    .section-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #6b7280;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid #f3f4f6;
+      padding-bottom: 6px;
+      margin-bottom: 12px;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .field {
+      margin-bottom: 10px;
+    }
+    .label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #9ca3af;
+      margin-bottom: 2px;
+    }
+    .value {
+      font-size: 13px;
+      color: #1f2937;
+      word-break: break-all;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+    .link {
+      color: #0284c7;
+      text-decoration: none;
+    }
+    .link:hover {
+      text-decoration: underline;
+    }
+    .footer {
+      border-top: 1px solid #f3f4f6;
+      padding-top: 16px;
+      margin-top: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: #9ca3af;
+    }
+    .print-control {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: #0284c7;
+      color: #ffffff;
+      padding: 12px 16px;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+      max-width: 240px;
+    }
+    .print-btn {
+      background: #ffffff;
+      color: #0284c7;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      margin-top: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 12px;
+      width: 100%;
+    }
+    @media print {
+      body {
+        background-color: #ffffff;
+        padding: 0;
+      }
+      .proof-container {
+        border: none;
+        padding: 0;
+        max-width: 100%;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-control no-print">
+    <div style="font-weight:700;margin-bottom:2px;">Payment Proof</div>
+    <div style="font-size:11px;">Save as PDF or print</div>
+    <button class="print-btn" onclick="window.print()">Save as PDF</button>
+  </div>
+  <div class="proof-container">
+    <div class="header">
+      <div>
+        <div class="brand">Quittance</div>
+        <div class="schema-version">Schema: quittance.v1</div>
+      </div>
+      <div>
+        <div style="text-align:right;"><span class="badge badge-paid">PAID</span></div>
+        <div class="network-badge">Network: testnet</div>
+      </div>
+    </div>
+
+    <div class="amount-card">
+      <div class="amount-label">Settled Amount</div>
+      <div class="amount-figure">250.5000000 USDC</div>
+      <div class="asset-issuer">Issuer: GDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Invoice & Timestamps</div>
+      <div class="grid-2">
+        <div class="field">
+          <div class="label">Invoice ID</div>
+          <div class="value mono">inv_8Qm2</div>
+        </div>
+        <div class="field">
+          <div class="label">Issued At (UTC)</div>
+          <div class="value mono">2026-09-10T09:00:00.000Z</div>
+        </div>
+        <div class="field">
+          <div class="label">Due At (UTC)</div>
+          <div class="value mono">2026-09-17T09:00:00.000Z</div>
+        </div>
+        <div class="field">
+          <div class="label">Settled At (UTC)</div>
+          <div class="value mono">2026-09-13T09:21:44.000Z</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Counterparties</div>
+      <div class="field">
+        <div class="label">Seller (Recipient)</div>
+        <div class="value mono">GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB</div>
+      </div>
+      <div class="field">
+        <div class="label">Payer</div>
+        <div class="value mono">GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Settlement Verification</div>
+      <div class="grid-2">
+        <div class="field">
+          <div class="label">Verification Status</div>
+          <div class="value">verified</div>
+        </div>
+        <div class="field">
+          <div class="label">Verification Method</div>
+          <div class="value">memo-and-amount</div>
+        </div>
+        <div class="field">
+          <div class="label">Verified At (UTC)</div>
+          <div class="value mono">2026-09-13T09:21:44.000Z</div>
+        </div>
+        <div class="field">
+          <div class="label">Memo</div>
+          <div class="value mono">QUIT-8QM2</div>
+        </div>
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <div class="label">Transaction Hash</div>
+        <div class="value mono">aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</div>
+      </div>
+      <div class="field">
+        <div class="label">Explorer Record</div>
+        <div class="value"><a href="https://stellar.expert/explorer/testnet/tx/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" target="_blank" rel="noopener noreferrer" class="link mono">https://stellar.expert/explorer/testnet/tx/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</a></div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div>Generated at 2026-09-13T12:00:00.000Z by quittance-web</div>
+      <div>Canonical Quittance Proof (quittance.v1)</div>
+    </div>
+  </div>
+</body>
+</html>

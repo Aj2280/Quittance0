@@ -7,6 +7,9 @@ register('./export-loader.mjs', import.meta.url);
 const {
   escapeHtml,
   generateInvoicePDF,
+  generateQuittanceProofPDF,
+  buildQuittanceProof,
+  isQuittanceProof,
   buildInvoiceMailto,
   buildProofMailto,
   canSendInvoiceEmail,
@@ -101,5 +104,34 @@ test('buildInvoiceMailto and buildProofMailto generate valid mailto links with e
   assert.ok(proofMailto.startsWith('mailto:alice%40client.example?'));
   assert.ok(proofMailto.includes('subject=Payment%20Proof%20-%20Invoice%20%23TEST-INV%20-%20100%20USDC'));
   assert.ok(proofMailto.includes(encodeURIComponent(`Transaction Hash: ${'b'.repeat(64)}`)));
+});
+
+test('generateInvoicePDF and generateQuittanceProofPDF handle canonical QuittanceProof models', () => {
+  const proofResult = buildQuittanceProof({
+    id: 'test-canonical-1',
+    status: 'PAID',
+    sellerPublicKey: 'G' + 'B'.repeat(55),
+    payerPublicKey: 'G' + 'C'.repeat(55),
+    amount: '150.25',
+    assetCode: 'USDC',
+    assetIssuer: 'G' + 'D'.repeat(55),
+    memo: 'MEMO-CANONICAL',
+    paymentTxHash: 'c'.repeat(64),
+    createdAt: '2026-08-01T10:00:00.000Z',
+    expiresAt: '2026-08-08T10:00:00.000Z',
+    paidAt: '2026-08-01T11:00:00.000Z',
+  }, { network: 'testnet', now: new Date('2026-08-01T12:00:00.000Z') });
+
+  assert.equal(proofResult.ok, true);
+  assert.equal(isQuittanceProof(proofResult.proof), true);
+
+  const htmlFromInvoicePdf = generateInvoicePDF(proofResult.proof);
+  const htmlFromProofPdf = generateQuittanceProofPDF(proofResult.proof);
+
+  assert.equal(htmlFromInvoicePdf, htmlFromProofPdf);
+  assert.ok(htmlFromInvoicePdf.includes('quittance.v1'));
+  assert.ok(htmlFromInvoicePdf.includes('150.2500000 USDC'));
+  assert.ok(htmlFromInvoicePdf.includes('test-canonical-1'));
+  assert.ok(!htmlFromInvoicePdf.includes('undefined'));
 });
 
