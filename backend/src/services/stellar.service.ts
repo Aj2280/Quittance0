@@ -25,6 +25,12 @@ export interface PaymentRecord {
   createdAt: string;
 }
 
+export interface PaymentPageRecord {
+  pagingToken: string;
+  ledger?: number;
+  payment?: PaymentRecord;
+}
+
 class StellarService {
   /**
    * Load account details from Stellar network
@@ -157,6 +163,64 @@ class StellarService {
   }
 
   /**
+   * Read one ascending Horizon page. Every record is returned, including
+   * non-payment and outgoing records, so callers can checkpoint the exact
+   * paging token without repeatedly scanning irrelevant operations.
+   */
+  async getPaymentsPage(
+    publicKey: string,
+    cursor: string,
+    limit: number = 100
+  ): Promise<PaymentPageRecord[]> {
+    const page = await server
+      .payments()
+      .forAccount(publicKey)
+      .cursor(cursor)
+      .order('asc')
+      .limit(limit)
+      .call();
+
+    const records: PaymentPageRecord[] = [];
+    for (const record of page.records as any[]) {
+      const pagingToken = String(record.paging_token ?? record.id);
+      const base: PaymentPageRecord = { pagingToken };
+
+      if (record.type !== 'payment' || record.to !== publicKey) {
+        records.push(base);
+        continue;
+      }
+
+      const transaction = await server.transactions().transaction(record.transaction_hash).call();
+      const ledger = Number((transaction as any).ledger_attr ?? (transaction as any).ledger);
+      records.push({
+        pagingToken,
+        ledger: Number.isFinite(ledger) ? ledger : undefined,
+        payment: {
+          id: String(record.id),
+          txHash: record.transaction_hash,
+          from: record.from,
+          to: record.to,
+          amount: record.amount,
+          assetCode: record.asset_type === 'native' ? 'XLM' : (record.asset_code ?? 'UNKNOWN'),
+          assetIssuer: record.asset_type === 'native' ? undefined : record.asset_issuer,
+          memo: (transaction as any).memo || undefined,
+          memoType: (transaction as any).memo_type || undefined,
+          ledger: Number.isFinite(ledger) ? ledger : 0,
+          createdAt: record.created_at,
+        },
+      });
+    }
+    return records;
+  }
+
+  /** Anchor a brand-new monitor at the latest known operation. */
+  async getLatestPaymentCursor(publicKey: string): Promise<string> {
+    const page = await server.payments().forAccount(publicKey).order('desc').limit(1).call();
+    const latest = (page.records as any[])[0];
+    return latest ? String(latest.paging_token ?? latest.id) : '0';
+  }
+
+  /**
    * Get recent payments for an account
    */
   async getRecentPayments(publicKey: string, limit: number = 10): Promise<PaymentRecord[]> {
@@ -243,4 +307,3 @@ class StellarService {
 }
 
 export default new StellarService();
-

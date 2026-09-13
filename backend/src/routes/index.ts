@@ -38,4 +38,11 @@ router.post('/payment/sync', async (req, res) => {
   }
 });
 
+router.get('/payment/monitor/status', (_req, res) => {
+  res.json({
+    success: true,
+    data: paymentMonitorService.getStatus(),
+  });
+});
+
 export default router;
