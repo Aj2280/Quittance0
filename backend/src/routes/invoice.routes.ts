@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { createInvoiceHandlers, InvoiceHandlerOptions } from './invoice.handlers';
+import { getQuittanceProof, getQuittanceProofPDF } from '../controllers/quittance-proof.controller';
 
 /**
  * Invoice routes shared by both servers. Mount under `/api`.
@@ -14,6 +15,8 @@ import { createInvoiceHandlers, InvoiceHandlerOptions } from './invoice.handlers
  *   POST   /invoices/:id/cancel (seller authorized)
  *   POST   /invoices/:id/verify
  *   POST   /invoices/:id/simulate-payment
+ *   GET    /invoices/:id/quittance-proof (canonical JSON proof)
+ *   GET    /invoices/:id/quittance-proof.pdf (PDF-ready HTML)
  * If a route is added here, wire it into the same shared handlers so parity
  * tests in invoice-handlers.test.ts cover both storage backends.
  */
@@ -27,6 +30,8 @@ export function createInvoiceRouter(options: InvoiceHandlerOptions): Router {
   router.get('/invoices', handlers.getInvoices);
   router.get('/invoices/:id', handlers.getInvoice);
   router.get('/invoices/:id/payment-info', handlers.getPaymentInfo);
+  router.get('/invoices/:id/quittance-proof', getQuittanceProof);
+  router.get('/invoices/:id/quittance-proof.pdf', getQuittanceProofPDF);
   router.post('/invoices/:id/cancel', handlers.cancelInvoice);
   router.post('/invoices/:id/verify', handlers.verifyPayment);
   router.post('/invoices/:id/simulate-payment', handlers.simulatePayment);
