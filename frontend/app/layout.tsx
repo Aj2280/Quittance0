@@ -6,6 +6,7 @@ import { MAIN_CONTENT_ID } from '@/lib/a11y';
 import './globals.css';
 import ApiStatusBanner from '@/components/ApiStatusBanner';
 import FreighterNetworkListener from '@/components/FreighterNetworkListener';
+import WalletSessionSync from '@/components/WalletSessionSync';
 
 const instrumentSerif = Instrument_Serif({
   weight: '400',
