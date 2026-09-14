@@ -3,23 +3,40 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-export const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  maxRetriesPerRequest: null,
-  retryStrategy(times) {
-    const delay = Math.min(times * 50, 2000);
-    return delay;
-  },
-});
+function buildRedisClient(): Redis {
+  const client = new Redis({
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT || '6379'),
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    maxRetriesPerRequest: 1,
+    retryStrategy(times) {
+      if (times > 1) return null;
+      return Math.min(times * 50, 200);
+    },
+  });
 
-redis.on('connect', () => {
-  console.log('✅ Redis connected');
-});
+  client.on('connect', () => {
+    console.log('✅ Redis connected');
+  });
 
-redis.on('error', (err) => {
-  console.error('❌ Redis error:', err);
-});
+  client.on('error', (err) => {
+    console.error('❌ Redis error:', err);
+  });
 
+  return client;
+}
+
+export async function createRedisClient(): Promise<Redis> {
+  const client = buildRedisClient();
+  try {
+    await client.connect();
+    return client;
+  } catch (error) {
+    client.disconnect();
+    throw error;
+  }
+}
+
+export const redis = buildRedisClient();
 export default redis;
-

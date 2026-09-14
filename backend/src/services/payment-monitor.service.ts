@@ -4,6 +4,10 @@ import invoiceService, { InvoiceService, Queryable } from './invoice.service';
 import { SELLER_PUBLIC_KEY, STELLAR_NETWORK } from '../config/stellar';
 import { pool } from '../config/database';
 import { checkInvoiceIsPayable, verifyHorizonPayment } from './payment-verification';
+import {
+  parseSettlementTime,
+  SettlementTimeUnavailableError,
+} from '../domain/invoice-settlement';
 import { monitorBackoffMs } from '../utils/monitor-retry-backoff';
 import {
   FilePaymentMonitorCheckpointStore,
@@ -219,7 +223,7 @@ export class PaymentMonitorService {
     if (!invoice) return;
 
     const payable = checkInvoiceIsPayable(invoice.status);
-    if (!payable.ok) return;
+    if (!payable.ok && invoice.status !== 'CANCELLED') return;
 
     const isNative = payment.assetCode === 'XLM' && !payment.assetIssuer;
     const verification = verifyHorizonPayment({
@@ -260,8 +264,19 @@ export class PaymentMonitorService {
       return;
     }
 
+    const settledAt = parseSettlementTime(payment.createdAt) ?? verification.value.settledAt;
+    if (invoice.status === 'CANCELLED' && !settledAt) {
+      throw new SettlementTimeUnavailableError();
+    }
+
     await this.saveTransaction(payment, invoice.id);
-    await this.invoices.markAsPaid(invoice.id, payment.txHash, payment.from);
+    await this.invoices.markAsPaid(
+      invoice.id,
+      payment.txHash,
+      payment.from,
+      undefined,
+      { settledAt }
+    );
   }
 
   private async saveTransaction(payment: PaymentRecord, invoiceId: string) {

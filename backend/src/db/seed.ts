@@ -12,7 +12,8 @@ import { pool } from '../config/database';
 // metadata, USDC credit-asset issuer on the expired row. The INSERT uses
 // ON CONFLICT (memo) DO NOTHING so re-seeding is idempotent — integration
 // tests in invoice-postgres.integration.test.ts run the seed twice and
-// assert exactly 4 rows to guard against accidental column changes.
+// assert exactly 4 rows to guard against accidental column changes. Settlement
+// context columns are seeded explicitly for paid rows and left null otherwise.
 const SQL_DIR = path.join(__dirname, '../../../db');
 
 async function seed() {

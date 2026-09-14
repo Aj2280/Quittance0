@@ -71,10 +71,31 @@ interface Invoice {
   createdAt: string;
   expiresAt: string;
   paidAt?: string;
+  cancelledAt?: string;
+  settledAt?: string;
+  settlementContext?: 'ON_TIME' | 'AFTER_EXPIRY' | 'AFTER_CANCEL';
+  priorStatus?: string;
+  latePaymentWarningCode?: 'PAYMENT_RECEIVED_AFTER_EXPIRY' | 'PAYMENT_RECEIVED_AFTER_CANCEL';
   memo: string;
   sellerPublicKey: string;
   payerPublicKey?: string;
   paymentTxHash?: string;
+}
+
+function latePaymentWarning(invoice: Invoice): { title: string; body: string } | null {
+  if (invoice.latePaymentWarningCode === 'PAYMENT_RECEIVED_AFTER_CANCEL') {
+    return {
+      title: 'Payment received after cancellation',
+      body: 'This transaction proves funds reached the seller. Contact the seller to reconcile the payment.',
+    };
+  }
+  if (invoice.latePaymentWarningCode === 'PAYMENT_RECEIVED_AFTER_EXPIRY') {
+    return {
+      title: 'Payment received after invoice expiry',
+      body: 'This transaction proves funds reached the seller after the original payment window.',
+    };
+  }
+  return null;
 }
 
 export function generateInvoiceCSV(invoices: Invoice[]): string {
@@ -155,6 +176,7 @@ export function generateInvoicePDF(invoiceOrProof: Invoice | QuittanceProof): st
   assertPaymentProofAvailable(invoice);
   const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK === 'TESTNET' ? 'Testnet' : 'Mainnet';
   const isPaid = invoice.status === 'PAID';
+  const warning = latePaymentWarning(invoice);
 
   return `
 <!DOCTYPE html>
@@ -302,6 +324,19 @@ export function generateInvoicePDF(invoiceOrProof: Invoice | QuittanceProof): st
       color: #92400e; 
       line-height: 1.4; 
     }
+    .late-warning {
+      background: #fffbeb;
+      border: 1px solid #fbbf24;
+      border-left: 3px solid #d97706;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 15px;
+    }
+    .late-warning p {
+      font-size: 10px;
+      color: #92400e;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
@@ -332,7 +367,7 @@ export function generateInvoicePDF(invoiceOrProof: Invoice | QuittanceProof): st
         <div class="info-label">Expires</div>
         <div class="info-value">${format(new Date(invoice.expiresAt), 'MMM dd, yyyy')}</div>
       </div>
-      ${isPaid ? `<div class="info-row"><div class="info-label">Payment Date</div><div class="info-value">${format(new Date(invoice.paidAt!), 'MMM dd, yyyy HH:mm')}</div></div>` : ''}
+      ${isPaid ? `<div class="info-row"><div class="info-label">Payment Date</div><div class="info-value">${format(new Date(invoice.settledAt || invoice.paidAt!), 'MMM dd, yyyy HH:mm')}</div></div>` : ''}
     </div>
   </div>
 
@@ -355,6 +390,8 @@ export function generateInvoicePDF(invoiceOrProof: Invoice | QuittanceProof): st
     <div class="amount-value">${invoice.amount}</div>
     <div class="amount-asset">${escapeHtml(invoice.assetCode)}</div>
   </div>
+
+  ${warning ? `<div class="late-warning"><p><strong>${escapeHtml(warning.title)}</strong></p><p>${escapeHtml(warning.body)}</p></div>` : ''}
 
   ${invoice.description ? `<div class="info-section" style="margin-bottom: 20px;"><h3>Description</h3><p style="color: #1f2937; line-height: 1.6;">${escapeHtml(invoice.description)}</p></div>` : ''}
 
@@ -430,4 +467,3 @@ export function shareInvoiceByEmail(invoice: Invoice, baseUrl?: string): string 
 export function emailPaymentProof(invoice: Invoice, baseUrl?: string): string {
   return openProofMailto(invoice, baseUrl);
 }
-

@@ -20,6 +20,10 @@ import {
   verifyHorizonPayment,
 } from '../services/payment-verification';
 import { PaymentClaimError } from '../domain/payment-attribution';
+import {
+  SettlementTimeUnavailableError,
+  warningForLatePayment,
+} from '../domain/invoice-settlement';
 import { cutoverDrainMode, simulationAllowed } from '../config/runtime';
 import { createRequestId } from '../utils/request-correlation-id';
 import { checkInvoiceVerifyLimit } from '../middleware/rate-limit';
@@ -276,8 +280,10 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
       } catch (error: any) {
         logError('Cancel invoice error:', error);
         const message = error.message || 'Failed to cancel invoice';
-        const isUnauthorized = message.toLowerCase().includes('unauthorized');
-        sendFailure(res, isUnauthorized ? 401 : 400, message);
+        const lowerMessage = message.toLowerCase();
+        const isSellerMismatch = lowerMessage.includes('only the seller can cancel');
+        const isUnauthorized = lowerMessage.includes('unauthorized');
+        sendFailure(res, isSellerMismatch ? 403 : isUnauthorized ? 401 : 400, message);
       }
     },
 
@@ -315,7 +321,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         }
 
         const statusCheck = checkInvoiceIsPayable(invoice.status);
-        if (!statusCheck.ok) {
+        if (!statusCheck.ok && invoice.status !== 'CANCELLED') {
           return sendVerificationFailure(res, 400, statusCheck.code, statusCheck.error);
         }
 
@@ -351,13 +357,23 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           return sendVerificationFailure(res, 400, verification.code, verification.error);
         }
 
+        if (invoice.status === 'CANCELLED' && !verification.value.settledAt) {
+          return sendVerificationFailure(
+            res,
+            503,
+            'TRANSACTION_CLOSE_TIME_UNAVAILABLE',
+            messageForCode('TRANSACTION_CLOSE_TIME_UNAVAILABLE')
+          );
+        }
+
         let updatedInvoice: StoredInvoice;
         try {
           updatedInvoice = await storage.markAsPaid(
             id,
             verification.value.txHash,
             verification.value.from,
-            payerCheck.value
+            payerCheck.value,
+            { settledAt: verification.value.settledAt }
           );
           
           // Cache successful verification
@@ -368,6 +384,14 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
             // this one as well. 409, not 400: the request is well formed and it
             // is the server's recorded state that refuses it.
             return sendVerificationFailure(res, 409, error.code, messageForCode(error.code));
+          }
+          if (error instanceof SettlementTimeUnavailableError) {
+            return sendVerificationFailure(
+              res,
+              503,
+              'TRANSACTION_CLOSE_TIME_UNAVAILABLE',
+              messageForCode('TRANSACTION_CLOSE_TIME_UNAVAILABLE')
+            );
           }
           // The payment lookup can cross expiresAt after the first status read.
           // Re-read so that race still returns the public expiry contract.
@@ -384,7 +408,13 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           throw error;
         }
 
-        sendSuccess(res, 200, updatedInvoice, { message: 'Payment verified on Stellar' });
+        sendSuccess(res, 200, updatedInvoice, {
+          message: 'Payment verified on Stellar',
+          code: updatedInvoice.latePaymentWarningCode,
+          warning: updatedInvoice.latePaymentWarningCode
+            ? warningForLatePayment(updatedInvoice.latePaymentWarningCode)
+            : undefined,
+        });
       } catch (error: any) {
         logError('Verify payment error:', error);
         sendFailure(res, 500, error.message || 'Failed to verify payment');

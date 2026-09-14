@@ -17,6 +17,7 @@ import {
   PaymentClaimError,
   PaymentClaimIndex,
 } from '../src/domain/payment-attribution';
+import { SettlementTimeUnavailableError } from '../src/domain/invoice-settlement';
 import { MemoryStorage } from '../src/storage/memory-storage';
 import { InvoiceMemoryService } from '../src/services/invoice-memory.service';
 import { createInvoiceSchema } from '../src/utils/validation';
@@ -123,7 +124,10 @@ describe('one transaction settles one invoice', () => {
     const cancelled = seed(storage, 'INV-CANCELLED');
     storage.updateInvoice(cancelled.id, { status: 'CANCELLED' });
 
-    assert.equal(storage.markAsPaid(cancelled.id, TX_A, SELLER), undefined);
+    assert.throws(
+      () => storage.markAsPaid(cancelled.id, TX_A, SELLER),
+      SettlementTimeUnavailableError
+    );
     assert.equal(
       storage.getPaymentClaim(TX_A),
       undefined,
@@ -179,4 +183,3 @@ describe('memo uniqueness', () => {
     await assert.rejects(() => service.createInvoice(invoiceInput()), MemoCollisionError);
   });
 });
-

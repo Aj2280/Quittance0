@@ -1,11 +1,15 @@
 import { CreateInvoiceInput } from '../utils/validation';
+import type {
+  LatePaymentWarningCode,
+  SettlementContext,
+} from '../domain/invoice-settlement';
 import type { InvoiceStats } from './invoice-stats';
 
 // Shared shape and shared storage contract. Both MemoryInvoiceStorage and
 // PostgresInvoiceStorage implement these 8 methods with the same semantics,
 // and every invoice they return is the StoredInvoice type below. Behaviour
-// parity (expiry guard on markAsPaid, single-transition PENDING->CANCELLED,
-// PENDING->PAID only when expiresAt still in the future, lazy
+// parity (expiry guard on normal markAsPaid, cancel-aware late settlement,
+// single-transition PENDING->CANCELLED, lazy
 // markExpiredInvoices on all reads, strict seller_public_key scoping on list
 // and stats) is pinned by the shared test suite in invoice-handlers.test.ts.
 export type InvoiceStatus = 'PENDING' | 'PAID' | 'EXPIRED' | 'CANCELLED';
@@ -33,6 +37,11 @@ export interface StoredInvoice {
   payerEmail?: string;
   createdAt: Date;
   paidAt?: Date;
+  cancelledAt?: Date;
+  settledAt?: Date;
+  settlementContext?: SettlementContext;
+  priorStatus?: InvoiceStatus;
+  latePaymentWarningCode?: LatePaymentWarningCode;
   expiresAt: Date;
   metadata?: any;
 }
@@ -40,6 +49,11 @@ export interface StoredInvoice {
 export interface PayerInfo {
   payerName?: string;
   payerEmail?: string;
+}
+
+export interface MarkAsPaidOptions {
+  /** Horizon ledger close time for the matching transaction. */
+  settledAt?: Date;
 }
 
 /**
@@ -65,7 +79,8 @@ export interface InvoiceStorage {
     id: string,
     txHash: string,
     payerPublicKey: string,
-    payerInfo?: PayerInfo
+    payerInfo?: PayerInfo,
+    options?: MarkAsPaidOptions
   ): Promise<StoredInvoice>;
   getInvoiceStats(sellerPublicKey: string): Promise<InvoiceStats[]>;
   /** Explicit maintenance hook; reads also apply this transition lazily. */

@@ -6,7 +6,7 @@ import memoryStorage, { MemoryStorage, MemoryPaymentEvent } from '../storage/mem
 import { calculateInvoiceExpiry } from '../domain/invoice-expiry';
 import type { StoredInvoice } from '../storage/invoice-storage';
 import type { InvoiceStats } from '../storage/invoice-stats';
-import type { PayerInfo } from '../storage/invoice-storage';
+import type { MarkAsPaidOptions, PayerInfo } from '../storage/invoice-storage';
 
 /**
  * How many times invoice creation re-draws a memo before giving up.
@@ -90,9 +90,10 @@ export class InvoiceMemoryService {
     invoiceId: string,
     txHash: string,
     payerPublicKey: string,
-    payerInfo?: PayerInfo
+    payerInfo?: PayerInfo,
+    options?: MarkAsPaidOptions
   ): Promise<StoredInvoice> {
-    const invoice = this.storage.markAsPaid(invoiceId, txHash, payerPublicKey, payerInfo);
+    const invoice = this.storage.markAsPaid(invoiceId, txHash, payerPublicKey, payerInfo, options);
 
     if (!invoice) {
       throw new Error('Invoice not found, expired, or already processed');
@@ -118,21 +119,19 @@ export class InvoiceMemoryService {
   }
 
   async cancelInvoice(invoiceId: string, sellerPublicKey?: string): Promise<StoredInvoice> {
-    const invoice = this.storage.getInvoiceById(invoiceId);
-
-    if (!invoice || invoice.status !== 'PENDING') {
-      throw new Error('Invoice not found or already processed');
-    }
-
-    if (sellerPublicKey && invoice.sellerPublicKey !== sellerPublicKey) {
-      throw new Error('Unauthorized: only the seller can cancel this invoice');
-    }
-
-    const updated = this.storage.updateInvoice(invoiceId, { status: 'CANCELLED' });
+    const updated = this.storage.cancelInvoice(invoiceId, sellerPublicKey);
     if (!updated) {
       throw new Error('Invoice not found or already processed');
     }
     return updated;
+  }
+
+  async logPaymentEvent(invoiceId: string, eventType: string, eventData: any): Promise<void> {
+    this.storage.logPaymentEvent(invoiceId, eventType, eventData);
+  }
+
+  async getPaymentEvents(invoiceId?: string): Promise<MemoryPaymentEvent[]> {
+    return this.storage.getPaymentEvents(invoiceId);
   }
 
   async markExpiredInvoices(now?: Date): Promise<number> {

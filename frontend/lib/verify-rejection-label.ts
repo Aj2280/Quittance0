@@ -19,10 +19,11 @@
 //
 // @typedef {'MISSING_TX_HASH' | 'INVALID_TX_HASH' | 'INVALID_PAYER_NAME' |
 //   'INVALID_PAYER_EMAIL' | 'PAYER_INFO_TOO_LONG' | 'INVOICE_ALREADY_PAID' |
-//   'INVOICE_EXPIRED' | 'INVOICE_NOT_PENDING' | 'TRANSACTION_NOT_FOUND' |
+//   'VERIFY_RATE_LIMIT_EXCEEDED' | 'INVOICE_EXPIRED' | 'INVOICE_NOT_PENDING' |
+//   'TRANSACTION_NOT_FOUND' | 'TRANSACTION_CLOSE_TIME_UNAVAILABLE' |
 //   'NO_PAYMENT_OPERATION' | 'MEMO_MISMATCH' | 'DESTINATION_MISMATCH' |
 //   'AMOUNT_MISMATCH' | 'ASSET_MISMATCH' | 'NETWORK_MISMATCH' |
-//   'UNKNOWN_VERIFICATION_ERROR'} VerificationCodeLabel
+//   'TX_HASH_ALREADY_USED' | 'UNKNOWN_VERIFICATION_ERROR'} VerificationCodeLabel
 
 const UNKNOWN_LABEL = 'Unknown verification error';
 
@@ -42,16 +43,19 @@ const REJECTION_LABELS: Record<string, string> = {
   INVALID_PAYER_NAME: 'Invalid payer name',
   INVALID_PAYER_EMAIL: 'Invalid payer email',
   PAYER_INFO_TOO_LONG: 'Payer information too long',
+  VERIFY_RATE_LIMIT_EXCEEDED: 'Rate limit exceeded',
   INVOICE_ALREADY_PAID: 'Invoice already paid',
   INVOICE_EXPIRED: 'Invoice expired',
   INVOICE_NOT_PENDING: 'Invoice not pending',
   TRANSACTION_NOT_FOUND: 'Transaction not found',
+  TRANSACTION_CLOSE_TIME_UNAVAILABLE: 'Close time unavailable',
   NO_PAYMENT_OPERATION: 'No payment operation',
   MEMO_MISMATCH: 'Memo mismatch',
   DESTINATION_MISMATCH: 'Destination mismatch',
   AMOUNT_MISMATCH: 'Amount mismatch',
   ASSET_MISMATCH: 'Asset mismatch',
   NETWORK_MISMATCH: 'Network mismatch',
+  TX_HASH_ALREADY_USED: 'Transaction already used',
   UNKNOWN_VERIFICATION_ERROR: UNKNOWN_LABEL,
 };
 

@@ -17,6 +17,7 @@ import {
   resolvePaymentAsset,
 } from '../utils/asset-helpers';
 import { amountsMatch as stroopAmountsMatch } from '../utils/verify-amount-tolerance';
+import { parseSettlementTime } from '../domain/invoice-settlement';
 
 import {
   messageForCode,
@@ -110,7 +111,7 @@ export function checkPayerInfo(input: PayerInfo | Record<string, any>): Verifica
   };
 }
 
-/** Only a PENDING invoice may transition to PAID. */
+/** Front-door status gate; terminal cancellation settlement is handled by storage policy. */
 export function checkInvoiceIsPayable(status: string): VerificationResult<null> {
   if (status === 'PAID') {
     return failure('INVOICE_ALREADY_PAID');
@@ -138,6 +139,7 @@ export interface ExpectedPayment {
 export interface HorizonTransactionLike {
   memo?: string | null;
   memo_type?: string | null;
+  created_at?: string | null;
 }
 
 export interface HorizonOperationLike {
@@ -254,6 +256,7 @@ export interface VerifiedPayment {
   assetCode: string;
   assetIssuer?: string;
   memo: string;
+  settledAt?: Date;
 }
 
 export interface VerifyPaymentInput {
@@ -271,6 +274,10 @@ export interface VerifyPaymentInput {
 
 function normalizeMemo(memo: unknown): string {
   return typeof memo === 'string' ? memo : '';
+}
+
+export function transactionSettlementTime(transaction: HorizonTransactionLike): Date | undefined {
+  return parseSettlementTime(transaction?.created_at) ?? undefined;
 }
 
 export function amountsMatch(actual: unknown, expected: string | number): boolean {
@@ -327,6 +334,7 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
   }
 
   const paidAssetCode = paymentOp.assetType === 'native' ? 'XLM' : paymentOp.assetCode ?? '';
+  const settledAt = transactionSettlementTime(transaction);
 
   return {
     ok: true,
@@ -338,6 +346,7 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
       assetCode: paidAssetCode,
       assetIssuer: paymentOp.assetType === 'native' ? undefined : paymentOp.assetIssuer,
       memo: normalizeMemo(transaction?.memo),
+      ...(settledAt ? { settledAt } : {}),
     },
   };
 }
@@ -353,5 +362,6 @@ export default {
   checkTxHash,
   checkPayerInfo,
   checkInvoiceIsPayable,
+  transactionSettlementTime,
   verifyHorizonPayment,
 };

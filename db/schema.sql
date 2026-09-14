@@ -11,7 +11,8 @@
 --   memo, description
 --   customer_name, customer_email
 --   status, payment_tx_hash
---   payer_public_key, payer_name, payer_email, paid_at
+--   payer_public_key, payer_name, payer_email, paid_at, cancelled_at
+--   settled_at, settlement_context, prior_status, late_payment_warning_code
 --   created_at, expires_at             (expires_at NOT NULL, default 7d)
 --   metadata (JSONB)
 
@@ -35,6 +36,11 @@ CREATE TABLE IF NOT EXISTS invoices (
   payer_email VARCHAR(255),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   paid_at TIMESTAMPTZ,
+  cancelled_at TIMESTAMPTZ,
+  settled_at TIMESTAMPTZ,
+  settlement_context VARCHAR(20) CHECK (settlement_context IN ('ON_TIME', 'AFTER_EXPIRY', 'AFTER_CANCEL')),
+  prior_status VARCHAR(20) CHECK (prior_status IN ('PENDING', 'PAID', 'EXPIRED', 'CANCELLED')),
+  late_payment_warning_code VARCHAR(50) CHECK (late_payment_warning_code IN ('PAYMENT_RECEIVED_AFTER_EXPIRY', 'PAYMENT_RECEIVED_AFTER_CANCEL')),
   expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '7 days',
   metadata JSONB
 );
@@ -88,6 +94,28 @@ SET expires_at = COALESCE(created_at, NOW()) + INTERVAL '7 days'
 WHERE expires_at IS NULL;
 ALTER TABLE invoices ALTER COLUMN expires_at SET DEFAULT NOW() + INTERVAL '7 days';
 ALTER TABLE invoices ALTER COLUMN expires_at SET NOT NULL;
+
+-- Converge databases created before deterministic cancel/payment settlement.
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS settlement_context VARCHAR(20);
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS prior_status VARCHAR(20);
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS late_payment_warning_code VARCHAR(50);
+
+ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_settlement_context_check;
+ALTER TABLE invoices ADD CONSTRAINT invoices_settlement_context_check
+  CHECK (settlement_context IS NULL OR settlement_context IN ('ON_TIME', 'AFTER_EXPIRY', 'AFTER_CANCEL'));
+
+ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_prior_status_check;
+ALTER TABLE invoices ADD CONSTRAINT invoices_prior_status_check
+  CHECK (prior_status IS NULL OR prior_status IN ('PENDING', 'PAID', 'EXPIRED', 'CANCELLED'));
+
+ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_late_payment_warning_code_check;
+ALTER TABLE invoices ADD CONSTRAINT invoices_late_payment_warning_code_check
+  CHECK (
+    late_payment_warning_code IS NULL OR
+    late_payment_warning_code IN ('PAYMENT_RECEIVED_AFTER_EXPIRY', 'PAYMENT_RECEIVED_AFTER_CANCEL')
+  );
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_invoices_seller ON invoices(seller_public_key);
