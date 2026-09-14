@@ -216,7 +216,7 @@ export default function DashboardPage() {
           would surface transfers unrelated to Quittance (issue #232).
         */}
         <>
-            {stats && (
+            {hasAnyInvoices && stats && (
               <section aria-label="Invoice statistics" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
             <div className="card">
               <div className="flex items-center gap-4">
@@ -305,6 +305,7 @@ export default function DashboardPage() {
           </section>
             )}
 
+            {hasAnyInvoices && (
             <div className="flex gap-3 mb-4">
               <div className="card flex-1 mb-0">
                 <label htmlFor="invoice-search" className="sr-only">
@@ -342,6 +343,7 @@ export default function DashboardPage() {
                 </span>
               )}
             </div>
+            )}
 
             {/*
               Toggle buttons in a named group. aria-pressed carries the selected
