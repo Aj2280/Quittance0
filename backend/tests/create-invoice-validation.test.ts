@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import { createInvoiceHandlers } from '../src/routes/invoice.handlers.ts';
 import { MemoryInvoiceStorage } from '../src/storage/memory-invoice-storage.ts';
 import { createInvoiceFieldErrors, createInvoiceSchema } from '../src/utils/validation.ts';
+import { isValidMemo } from '../src/utils/memo.ts';
 import {
   CREATE_INVOICE_MESSAGES,
   collectCreateInvoiceFieldErrors,
@@ -176,6 +177,29 @@ describe('create-invoice endpoint - the refusal names its fields', () => {
     assert.equal(
       res.body.fieldErrors.customerEmail,
       CREATE_INVOICE_MESSAGES.customerEmail
+    );
+  });
+
+  it('generates the invoice memo itself and ignores one sent by the client', async () => {
+    const handlers = createInvoiceHandlers({ storage: new MemoryInvoiceStorage() });
+
+    const withClientMemo = await call(
+      handlers.createInvoice as any,
+      createReq({ body: { ...payload(), memo: 'INV-CLIENT-SUPPLIED' } })
+    );
+    const plain = await call(handlers.createInvoice as any, createReq({ body: payload() }));
+
+    assert.equal(withClientMemo.statusCode, 201, JSON.stringify(withClientMemo.body));
+    assert.equal(plain.statusCode, 201, JSON.stringify(plain.body));
+
+    const memo = withClientMemo.body.data.invoice.memo;
+    assert.equal(typeof memo, 'string');
+    assert.notEqual(memo, 'INV-CLIENT-SUPPLIED', 'a client cannot choose the invoice memo');
+    assert.equal(isValidMemo(memo), true, 'the generated memo follows the documented format');
+    assert.notEqual(
+      memo,
+      plain.body.data.invoice.memo,
+      'two invoices never share a memo'
     );
   });
 
