@@ -20,7 +20,11 @@ import {
   verifyHorizonPayment,
 } from '../services/payment-verification';
 import { PaymentClaimError } from '../domain/payment-attribution';
-import { simulationAllowed } from '../config/runtime';
+import {
+  SettlementTimeUnavailableError,
+  warningForLatePayment,
+} from '../domain/invoice-settlement';
+import { cutoverDrainMode, simulationAllowed } from '../config/runtime';
 import { createRequestId } from '../utils/request-correlation-id';
 import { verifySellerSignature } from '../utils/signature-verification';
 
@@ -115,6 +119,13 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
 
   return {
     async createInvoice(req: Request, res: Response) {
+      if (cutoverDrainMode()) {
+        return sendFailure(
+          res,
+          503,
+          'System is in cutover drain mode. New invoice creation is temporarily paused.'
+        );
+      }
       const requestId = createRequestId();
       try {
         const validatedData = createInvoiceSchema.parse(req.body);
@@ -226,7 +237,30 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
             sendFailure(res, 400, 'Invalid Stellar public key format');
             return;
           }
-          sellerPublicKey = parsed.data;
+
+          // Fallback to claimed key (legacy, insecure)
+          if (req.body && typeof req.body === 'object' && 'sellerPublicKey' in req.body) {
+            const parsed = cancelInvoiceSchema.safeParse(req.body);
+            if (!parsed.success) {
+              return sendFailure(res, 400, 'Invalid Stellar public key format');
+            }
+            sellerPublicKey = parsed.data.sellerPublicKey;
+          } else if (req.query.sellerPublicKey) {
+            const parsed = stellarPublicKeySchema.safeParse(req.query.sellerPublicKey);
+            if (!parsed.success) {
+              return sendFailure(res, 400, 'Invalid Stellar public key format');
+            }
+            sellerPublicKey = parsed.data;
+          }
+        }
+
+        // Require explicit ownership proof (no more unauthenticated cancellation)
+        if (!sellerPublicKey) {
+          return sendFailure(
+            res,
+            401,
+            'Unauthorized: sellerPublicKey is required to cancel an invoice'
+          );
         }
 
         if (!sellerPublicKey && req.headers?.['x-seller-public-key']) {
@@ -302,8 +336,10 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
       } catch (error: any) {
         logError('Cancel invoice error:', error);
         const message = error.message || 'Failed to cancel invoice';
-        const isUnauthorized = message.toLowerCase().includes('unauthorized');
-        sendFailure(res, isUnauthorized ? 403 : 400, message);
+        const lowerMessage = message.toLowerCase();
+        const isSellerMismatch = lowerMessage.includes('only the seller can cancel');
+        const isUnauthorized = lowerMessage.includes('unauthorized');
+        sendFailure(res, isSellerMismatch ? 403 : isUnauthorized ? 401 : 400, message);
       }
     },
 
@@ -311,6 +347,18 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
       try {
         const { id } = req.params;
         const { network } = req.body || {};
+
+        // Per-invoice rate limit check (prevents Horizon amplification)
+        const invoiceLimit = await checkInvoiceVerifyLimit(id);
+        if (!invoiceLimit.allowed) {
+          res.set('Retry-After', (invoiceLimit.retryAfter || 60).toString());
+          return sendVerificationFailure(
+            res,
+            429,
+            'VERIFY_RATE_LIMIT_EXCEEDED',
+            'Too many verification attempts for this invoice'
+          );
+        }
 
         const hashCheck = checkTxHash(req.body?.txHash);
         if (!hashCheck.ok) {
@@ -329,7 +377,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         }
 
         const statusCheck = checkInvoiceIsPayable(invoice.status);
-        if (!statusCheck.ok) {
+        if (!statusCheck.ok && invoice.status !== 'CANCELLED') {
           return sendVerificationFailure(res, 400, statusCheck.code, statusCheck.error);
         }
 
@@ -339,6 +387,8 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         } catch (error: any) {
           logError('Verify payment lookup error:', error);
           const notFound = failure('TRANSACTION_NOT_FOUND');
+          // Cache the rejection to prevent repeated Horizon lookups for invalid hashes
+          await cacheVerificationResult(id, hashCheck.value, 'rejected', notFound.code);
           return sendVerificationFailure(res, 404, notFound.code, notFound.error);
         }
 
@@ -358,7 +408,18 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         });
 
         if (!verification.ok) {
+          // Cache verification failures to prevent repeated attempts
+          await cacheVerificationResult(id, hashCheck.value, 'rejected', verification.code);
           return sendVerificationFailure(res, 400, verification.code, verification.error);
+        }
+
+        if (invoice.status === 'CANCELLED' && !verification.value.settledAt) {
+          return sendVerificationFailure(
+            res,
+            503,
+            'TRANSACTION_CLOSE_TIME_UNAVAILABLE',
+            messageForCode('TRANSACTION_CLOSE_TIME_UNAVAILABLE')
+          );
         }
 
         let updatedInvoice: StoredInvoice;
@@ -367,14 +428,26 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
             id,
             verification.value.txHash,
             verification.value.from,
-            payerCheck.value
+            payerCheck.value,
+            { settledAt: verification.value.settledAt }
           );
+          
+          // Cache successful verification
+          await cacheVerificationResult(id, hashCheck.value, 'verified');
         } catch (error) {
           if (error instanceof PaymentClaimError) {
             // A transaction that already settled another invoice must not settle
             // this one as well. 409, not 400: the request is well formed and it
             // is the server's recorded state that refuses it.
             return sendVerificationFailure(res, 409, error.code, messageForCode(error.code));
+          }
+          if (error instanceof SettlementTimeUnavailableError) {
+            return sendVerificationFailure(
+              res,
+              503,
+              'TRANSACTION_CLOSE_TIME_UNAVAILABLE',
+              messageForCode('TRANSACTION_CLOSE_TIME_UNAVAILABLE')
+            );
           }
           // The payment lookup can cross expiresAt after the first status read.
           // Re-read so that race still returns the public expiry contract.
@@ -391,7 +464,13 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           throw error;
         }
 
-        sendSuccess(res, 200, updatedInvoice, { message: 'Payment verified on Stellar' });
+        sendSuccess(res, 200, updatedInvoice, {
+          message: 'Payment verified on Stellar',
+          code: updatedInvoice.latePaymentWarningCode,
+          warning: updatedInvoice.latePaymentWarningCode
+            ? warningForLatePayment(updatedInvoice.latePaymentWarningCode)
+            : undefined,
+        });
       } catch (error: any) {
         logError('Verify payment error:', error);
         sendFailure(res, 500, error.message || 'Failed to verify payment');
@@ -420,6 +499,13 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
 
     // Local testing only — hidden unless ALLOW_SIMULATE=true.
     async simulatePayment(req: Request, res: Response) {
+      if (cutoverDrainMode()) {
+        return sendFailure(
+          res,
+          503,
+          'System is in cutover drain mode. Payment simulation is temporarily paused.'
+        );
+      }
       try {
         if (!simulateAllowed()) {
           return sendFailure(res, 404, 'Endpoint not found');

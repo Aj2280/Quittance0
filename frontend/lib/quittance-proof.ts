@@ -1,25 +1,4 @@
-// Canonical quittance proof document (#376).
-//
-// Proof is the product: the client PDF and a machine-readable export are two
-// renderings of the same payment, and today they can drift (different fields,
-// order, timestamps or explorer URLs), so two "quittances" for one payment may
-// not match. This module owns the single document model both must consume.
-//
-// Invariants, in the sense the issue asks for - each one is asserted in
-// tests/quittance-proof.test.js and checked by checkQuittanceProofInvariants:
-//   1. versioned             - every document carries QUITTANCE_PROOF_VERSION
-//   2. amounts are strings   - never floats, so 7-decimal precision survives
-//   3. timestamps are UTC    - ISO-8601 with a Z suffix, never localised
-//   4. deterministic         - same input and same clock produce identical JSON
-//   5. one counterparty      - at most one payer address, never a history
-//   6. no secrets, no PII    - no Stellar secret key, no payer email or name
-//   7. no inferred ownership - the payer address appears only when supplied
-//
-// Everything in the document is either public chain data or the invoice's own
-// records. Nothing is fetched, so the model cannot leak another wallet's data
-// by accident.
-
-import { buildHorizonTxUrl } from './explorer-tx-link.ts';
+import { buildHorizonTxUrl } from './explorer-tx-link';
 
 export const QUITTANCE_PROOF_VERSION = 'quittance.v1';
 
@@ -90,6 +69,7 @@ export interface QuittanceProofInput {
   expiresAt?: string | Date | null;
   createdAt?: string | Date | null;
   paidAt?: string | Date | null;
+  settledAt?: string | Date | null;
 }
 
 export interface QuittanceProofOptions {
@@ -114,11 +94,6 @@ function utcIso(value: string | Date | null | undefined): string | null {
   return date.toISOString();
 }
 
-/**
- * Stellar amounts are fixed-point at 7 decimals. Accepting a number here would
- * silently round it, so numbers are converted through their decimal string and
- * anything that does not fit the pattern is rejected.
- */
 function normalizeAmount(value: string | number | null | undefined): string | null {
   if (typeof value === 'number') {
     if (!Number.isFinite(value) || value < 0) return null;
@@ -141,12 +116,35 @@ function isSettled(status: string): boolean {
   return status === 'PAID';
 }
 
+function escapeHtml(unsafe: unknown): string {
+  return String(unsafe ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Check if an unknown value conforms to the QuittanceProof contract.
+ *
+ * @param value - Candidate object to inspect.
+ * @returns True when value carries the canonical schema version.
+ */
+export function isQuittanceProof(value: unknown): value is QuittanceProof {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as QuittanceProof).schemaVersion === QUITTANCE_PROOF_VERSION
+  );
+}
+
 /**
  * Build the canonical document for one invoice.
  *
- * Returns an explicit error rather than throwing, because every failure here is
- * a user-visible state: a proof for an unpaid invoice must say "not settled",
- * not render a blank field.
+ * @param input - Invoice records to derive the proof from.
+ * @param options - Network selection and injected clock for determinism.
+ * @returns Validated proof or structured error code.
  */
 export function buildQuittanceProof(
   input: QuittanceProofInput,
@@ -188,7 +186,7 @@ export function buildQuittanceProof(
     txHash = candidate.toLowerCase();
   }
 
-  const checkedAt = settled ? utcIso(input.paidAt) : null;
+  const checkedAt = settled ? utcIso(input.settledAt ?? input.paidAt) : null;
   const generatedAt = (options.now ?? new Date()).toISOString();
 
   const proof: QuittanceProof = {
@@ -200,8 +198,6 @@ export function buildQuittanceProof(
     dueAt: utcIso(input.expiresAt) ?? generatedAt,
     settledAt: settled ? checkedAt : null,
     seller,
-    // Present only when the invoice recorded it. Never inferred from a stream
-    // or from another invoice's activity.
     payer: typeof input.payerPublicKey === 'string' && input.payerPublicKey.trim() !== ''
       ? input.payerPublicKey.trim()
       : null,
@@ -234,14 +230,21 @@ function ordered(proof: QuittanceProof): Record<string, unknown> {
 }
 
 /**
- * Machine-readable export. Two spaces, a trailing newline, and the field order
- * above, so a diff of two exports is meaningful.
+ * Machine-readable export with fixed field order.
+ *
+ * @param proof - Canonical quittance proof model.
+ * @returns Deterministic JSON string representation.
  */
 export function serializeQuittanceProof(proof: QuittanceProof): string {
   return JSON.stringify(ordered(proof), null, 2) + '\n';
 }
 
-/** Parse an exported document back, or null when it is not this schema. */
+/**
+ * Parse an exported document back, or null when it does not match this schema.
+ *
+ * @param json - Serialized JSON string.
+ * @returns Parsed QuittanceProof or null.
+ */
 export function parseQuittanceProof(json: string): QuittanceProof | null {
   try {
     const parsed = JSON.parse(json) as QuittanceProof;
@@ -254,11 +257,10 @@ export function parseQuittanceProof(json: string): QuittanceProof | null {
 }
 
 /**
- * Check the invariants listed at the top of this file against a serialized
- * document. Returns the names that are violated; an empty array means clean.
+ * Check the invariants against a serialized document.
  *
- * This is deliberately independent of the builder: it is the check a reviewer
- * (or a CI step) can run over an exported proof from anywhere.
+ * @param serialized - JSON string representation of a proof.
+ * @returns Array of violated invariant names; empty array means valid.
  */
 export function checkQuittanceProofInvariants(serialized: string): string[] {
   const violated: string[] = [];
@@ -300,11 +302,403 @@ export function checkQuittanceProofInvariants(serialized: string): string[] {
   return violated;
 }
 
-export default {
+/**
+ * Render the canonical quittance proof document into print-ready HTML.
+ *
+ * @param proof - Canonical quittance proof model.
+ * @returns Complete HTML document string formatted for browser printing to PDF.
+ */
+export function renderQuittanceProofHtml(proof: QuittanceProof): string {
+  const isPaid = proof.status === 'PAID';
+  const badgeClass = isPaid ? 'badge-paid' : proof.status === 'PENDING' ? 'badge-pending' : 'badge-other';
+
+  const explorerHtml = proof.payment.explorerUrl
+    ? `<a href="${escapeHtml(proof.payment.explorerUrl)}" target="_blank" rel="noopener noreferrer" class="link mono">${escapeHtml(proof.payment.explorerUrl)}</a>`
+    : `<span class="value mono">None</span>`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Proof #${escapeHtml(proof.invoiceId)} - Quittance</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 15mm;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #111827;
+      background-color: #f9fafb;
+      padding: 24px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .proof-container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 32px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid #0284c7;
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+    }
+    .brand {
+      font-size: 26px;
+      font-weight: 800;
+      color: #0284c7;
+      letter-spacing: -0.025em;
+    }
+    .schema-version {
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-paid {
+      background: #dcfce7;
+      color: #15803d;
+    }
+    .badge-pending {
+      background: #fef9c3;
+      color: #854d0e;
+    }
+    .badge-other {
+      background: #f3f4f6;
+      color: #4b5563;
+    }
+    .network-badge {
+      font-size: 11px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      margin-top: 6px;
+      text-align: right;
+    }
+    .amount-card {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .amount-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #166534;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+    .amount-figure {
+      font-size: 30px;
+      font-weight: 800;
+      color: #14532d;
+    }
+    .asset-issuer {
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #15803d;
+      margin-top: 4px;
+    }
+    .section {
+      margin-bottom: 24px;
+    }
+    .section-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #6b7280;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid #f3f4f6;
+      padding-bottom: 6px;
+      margin-bottom: 12px;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .field {
+      margin-bottom: 10px;
+    }
+    .label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #9ca3af;
+      margin-bottom: 2px;
+    }
+    .value {
+      font-size: 13px;
+      color: #1f2937;
+      word-break: break-all;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+    .link {
+      color: #0284c7;
+      text-decoration: none;
+    }
+    .link:hover {
+      text-decoration: underline;
+    }
+    .footer {
+      border-top: 1px solid #f3f4f6;
+      padding-top: 16px;
+      margin-top: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: #9ca3af;
+    }
+    .print-control {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: #0284c7;
+      color: #ffffff;
+      padding: 12px 16px;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+      max-width: 240px;
+    }
+    .print-btn {
+      background: #ffffff;
+      color: #0284c7;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      margin-top: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 12px;
+      width: 100%;
+    }
+    @media print {
+      body {
+        background-color: #ffffff;
+        padding: 0;
+      }
+      .proof-container {
+        border: none;
+        padding: 0;
+        max-width: 100%;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-control no-print">
+    <div style="font-weight:700;margin-bottom:2px;">Payment Proof</div>
+    <div style="font-size:11px;">Save as PDF or print</div>
+    <button class="print-btn" onclick="window.print()">Save as PDF</button>
+  </div>
+  <div class="proof-container">
+    <div class="header">
+      <div>
+        <div class="brand">Quittance</div>
+        <div class="schema-version">Schema: ${escapeHtml(proof.schemaVersion)}</div>
+      </div>
+      <div>
+        <div style="text-align:right;"><span class="badge ${badgeClass}">${escapeHtml(proof.status)}</span></div>
+        <div class="network-badge">Network: ${escapeHtml(proof.network)}</div>
+      </div>
+    </div>
+
+    <div class="amount-card">
+      <div class="amount-label">Settled Amount</div>
+      <div class="amount-figure">${escapeHtml(proof.payment.amount)} ${escapeHtml(proof.payment.asset.code)}</div>
+      ${proof.payment.asset.issuer ? `<div class="asset-issuer">Issuer: ${escapeHtml(proof.payment.asset.issuer)}</div>` : ''}
+    </div>
+
+    <div class="section">
+      <div class="section-title">Invoice & Timestamps</div>
+      <div class="grid-2">
+        <div class="field">
+          <div class="label">Invoice ID</div>
+          <div class="value mono">${escapeHtml(proof.invoiceId)}</div>
+        </div>
+        <div class="field">
+          <div class="label">Issued At (UTC)</div>
+          <div class="value mono">${escapeHtml(proof.issuedAt)}</div>
+        </div>
+        <div class="field">
+          <div class="label">Due At (UTC)</div>
+          <div class="value mono">${escapeHtml(proof.dueAt)}</div>
+        </div>
+        <div class="field">
+          <div class="label">Settled At (UTC)</div>
+          <div class="value mono">${escapeHtml(proof.settledAt ?? 'Not settled')}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Counterparties</div>
+      <div class="field">
+        <div class="label">Seller (Recipient)</div>
+        <div class="value mono">${escapeHtml(proof.seller)}</div>
+      </div>
+      <div class="field">
+        <div class="label">Payer</div>
+        <div class="value mono">${escapeHtml(proof.payer ?? 'Not recorded')}</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Settlement Verification</div>
+      <div class="grid-2">
+        <div class="field">
+          <div class="label">Verification Status</div>
+          <div class="value">${escapeHtml(proof.verification.status)}</div>
+        </div>
+        <div class="field">
+          <div class="label">Verification Method</div>
+          <div class="value">${escapeHtml(proof.verification.method)}</div>
+        </div>
+        <div class="field">
+          <div class="label">Verified At (UTC)</div>
+          <div class="value mono">${escapeHtml(proof.verification.checkedAt ?? 'N/A')}</div>
+        </div>
+        <div class="field">
+          <div class="label">Memo</div>
+          <div class="value mono">${escapeHtml(proof.payment.memo ?? 'None')}</div>
+        </div>
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <div class="label">Transaction Hash</div>
+        <div class="value mono">${escapeHtml(proof.payment.txHash || 'None')}</div>
+      </div>
+      <div class="field">
+        <div class="label">Explorer Record</div>
+        <div class="value">${explorerHtml}</div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div>Generated at ${escapeHtml(proof.document.generatedAtUtc)} by ${escapeHtml(proof.document.generatedBy)}</div>
+      <div>Canonical Quittance Proof (${escapeHtml(proof.schemaVersion)})</div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Render a deterministic jsPDF document from a canonical quittance proof.
+ *
+ * @param proof - Canonical quittance proof model.
+ * @param jsPdfCtor - Optional injected jsPDF constructor.
+ * @returns Configured jsPDF instance with fixed creation date and file ID.
+ */
+export function createQuittanceProofPdf(
+  proof: QuittanceProof,
+  jsPdfCtor?: unknown
+): any {
+  const Ctor: any = jsPdfCtor ?? (globalThis as any).jsPDF;
+  if (!Ctor) {
+    throw new Error('jsPDF constructor must be provided or available on globalThis.jsPDF');
+  }
+
+  const doc = new Ctor({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+    putOnlyUsedFonts: true,
+  });
+
+  const generatedDate = new Date(proof.document.generatedAtUtc);
+  doc.setCreationDate(Number.isNaN(generatedDate.getTime()) ? new Date(0) : generatedDate);
+  doc.setFileId('00000000000000000000000000000000');
+
+  doc.setFontSize(22);
+  doc.setTextColor(2, 132, 199);
+  doc.text('QUITTANCE', 14, 20);
+
+  doc.setFontSize(10);
+  doc.setTextColor(107, 114, 128);
+  doc.text(`Canonical Payment Proof (${proof.schemaVersion})`, 14, 26);
+
+  doc.setDrawColor(229, 231, 235);
+  doc.line(14, 30, 196, 30);
+
+  doc.setFontSize(11);
+  doc.setTextColor(17, 24, 39);
+  doc.text(`Invoice ID: ${proof.invoiceId}`, 14, 38);
+  doc.text(`Status: ${proof.status}`, 14, 45);
+  doc.text(`Network: ${proof.network}`, 14, 52);
+
+  doc.setFontSize(14);
+  doc.setTextColor(20, 83, 45);
+  doc.text(`Amount: ${proof.payment.amount} ${proof.payment.asset.code}`, 14, 62);
+
+  doc.setFontSize(10);
+  doc.setTextColor(75, 85, 99);
+  doc.text(`Seller: ${proof.seller}`, 14, 72);
+  doc.text(`Payer: ${proof.payer || 'Not recorded'}`, 14, 79);
+
+  doc.text(`Memo: ${proof.payment.memo || 'None'}`, 14, 89);
+  doc.text(`Transaction Hash: ${proof.payment.txHash || 'None'}`, 14, 96);
+  if (proof.payment.explorerUrl) {
+    doc.text(`Explorer: ${proof.payment.explorerUrl}`, 14, 103);
+  }
+
+  doc.text(`Verification: ${proof.verification.status} (${proof.verification.method})`, 14, 113);
+  doc.text(`Issued At (UTC): ${proof.issuedAt}`, 14, 120);
+  doc.text(`Due At (UTC): ${proof.dueAt}`, 14, 127);
+  doc.text(`Settled At (UTC): ${proof.settledAt || 'Not settled'}`, 14, 134);
+
+  doc.line(14, 142, 196, 142);
+  doc.setFontSize(8);
+  doc.setTextColor(156, 163, 175);
+  doc.text(`Generated At (UTC): ${proof.document.generatedAtUtc}`, 14, 148);
+  doc.text(`Generated By: ${proof.document.generatedBy}`, 14, 153);
+  doc.text('Anchor: Stellar Horizon consensus verification', 14, 158);
+
+  return doc;
+}
+
+const quittanceProof = {
   buildQuittanceProof,
   serializeQuittanceProof,
   parseQuittanceProof,
   checkQuittanceProofInvariants,
+  isQuittanceProof,
+  renderQuittanceProofHtml,
+  createQuittanceProofPdf,
   QUITTANCE_PROOF_VERSION,
   QUITTANCE_PROOF_FIELDS,
 };
+
+export default quittanceProof;

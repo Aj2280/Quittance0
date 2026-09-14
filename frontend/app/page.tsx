@@ -12,9 +12,9 @@ import UserProfile from '@/components/UserProfile';
 import FreighterInstallPrompt from '@/components/FreighterInstallPrompt';
 import AssetLogo from '@/components/AssetLogo';
 import { useWalletStore } from '@/lib/store';
-import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
+import { EXPECTED_WALLET_NETWORK, NETWORK_DISPLAY_NAME } from '@/lib/stellar';
 import { walletGate } from '@/lib/freighter-availability';
-import { Mail } from 'lucide-react';
+import { Mail, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { shareInvoiceByEmail } from '@/lib/export';
 import { renderLandingBullets } from '@/lib/landing-feature-bullets';
@@ -22,7 +22,7 @@ import { CREATED_INVOICE_ID, MAIN_CONTENT_ID, describeAmount } from '@/lib/a11y'
 
 export default function HomePage() {
   const [createdInvoice, setCreatedInvoice] = useState<any>(null);
-  const { publicKey, connected, network, freighterAvailable } = useWalletStore();
+  const { publicKey, connected, network, freighterAvailable, isWrongNetwork } = useWalletStore();
   const resultRef = useRef<HTMLDivElement>(null);
   const gate = walletGate(
     { freighterAvailable, connected, publicKey, network },
@@ -187,6 +187,15 @@ export default function HomePage() {
               {!gate.ready ? (
                 <div className="py-8 text-center">
                   <FreighterInstallPrompt gate={gate} action={<WalletConnect />} />
+                </div>
+              ) : isWrongNetwork ? (
+                <div className="py-8 text-center">
+                  <AlertTriangle className="w-10 h-10 text-amber-600 mx-auto mb-3" aria-hidden="true" />
+                  <h3 className="font-semibold text-lg text-amber-900 mb-2">Wrong Stellar Network</h3>
+                  <p className="text-sm text-amber-800 max-w-md mx-auto">
+                    Your Freighter wallet is connected to a different network. Please switch to {NETWORK_DISPLAY_NAME} in Freighter, then reconnect to create invoices.
+                  </p>
+                  <WalletConnect />
                 </div>
               ) : (
                 <>

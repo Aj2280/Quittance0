@@ -15,6 +15,11 @@ export interface PayPageInvoice {
   createdAt: string;
   expiresAt: string;
   paidAt?: string;
+  cancelledAt?: string;
+  settledAt?: string;
+  settlementContext?: 'ON_TIME' | 'AFTER_EXPIRY' | 'AFTER_CANCEL';
+  priorStatus?: 'PENDING' | 'PAID' | 'EXPIRED' | 'CANCELLED';
+  latePaymentWarningCode?: 'PAYMENT_RECEIVED_AFTER_EXPIRY' | 'PAYMENT_RECEIVED_AFTER_CANCEL';
   paymentTxHash?: string;
   payerName?: string;
   payerEmail?: string;

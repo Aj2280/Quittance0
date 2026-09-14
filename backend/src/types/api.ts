@@ -17,6 +17,8 @@ export interface ApiSuccess<T> {
   success: true;
   data: T;
   message?: string;
+  code?: string;
+  warning?: string;
   pagination?: ApiPagination;
 }
 
@@ -34,12 +36,18 @@ export type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
 
 export function apiSuccess<T>(
   data: T,
-  extra?: { message?: string; pagination?: ApiPagination }
+  extra?: { message?: string; code?: string; warning?: string; pagination?: ApiPagination }
 ): ApiSuccess<T> {
   const body: ApiSuccess<T> = { success: true, data };
 
   if (extra?.message) {
     body.message = extra.message;
+  }
+  if (extra?.code) {
+    body.code = extra.code;
+  }
+  if (extra?.warning) {
+    body.warning = extra.warning;
   }
   if (extra?.pagination) {
     body.pagination = extra.pagination;
@@ -56,7 +64,7 @@ export function sendSuccess<T>(
   res: Response,
   status: number,
   data: T,
-  extra?: { message?: string; pagination?: ApiPagination }
+  extra?: { message?: string; code?: string; warning?: string; pagination?: ApiPagination }
 ): void {
   res.status(status).json(apiSuccess(data, extra));
 }

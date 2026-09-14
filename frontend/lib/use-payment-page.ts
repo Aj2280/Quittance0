@@ -4,6 +4,10 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { apiErrorMessage, invoiceApi, isApiUnavailableError, PAYMENT_STATUS_POLL_INTERVAL_MS, resolveVerificationError } from './api';
 import { checkTxHash } from './verification';
 import {
+  HORIZON_OUTAGE_MESSAGE,
+  isHorizonOutageError,
+} from './horizon-outage';
+import {
   PAY_STATES,
   initialPaymentState,
   normalizePayerDetails,
@@ -78,6 +82,7 @@ export function usePaymentPage(id: string) {
       } catch (error) {
         console.error('Invoice status polling failed:', error);
         if (isApiUnavailableError(error)) setLoadError(apiErrorMessage(error));
+        else if (isHorizonOutageError(error)) setLoadError(HORIZON_OUTAGE_MESSAGE);
       }
     }, paymentInfo?.statusPollingIntervalMs ?? PAYMENT_STATUS_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
@@ -98,6 +103,16 @@ export function usePaymentPage(id: string) {
       void load();
     } catch (error) {
       if (request !== generation.current) return;
+
+      // A Horizon or transport failure is not a rejection: keep the session,
+      // say it is retryable, and leave the verify control in place.
+      if (isHorizonOutageError(error)) {
+        setLoadError(HORIZON_OUTAGE_MESSAGE);
+        dispatch({ type: 'VERIFY_UNAVAILABLE' });
+        toast.error(HORIZON_OUTAGE_MESSAGE);
+        return;
+      }
+
       const message = resolveVerificationError(error);
       if (isApiUnavailableError(error)) setLoadError(apiErrorMessage(error));
       dispatch({ type: 'VERIFY_FAILED', error: message });

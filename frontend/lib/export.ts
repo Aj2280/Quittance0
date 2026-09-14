@@ -14,6 +14,16 @@ import {
   openProofMailto,
 } from './mailto-delivery.js';
 
+import {
+  buildQuittanceProof,
+  createQuittanceProofPdf,
+  isQuittanceProof,
+  renderQuittanceProofHtml,
+  type QuittanceProof,
+  type QuittanceProofResult,
+  QUITTANCE_PROOF_VERSION,
+} from './quittance-proof';
+
 export {
   assertPaymentProofAvailable,
   canExportPaymentProof,
@@ -25,7 +35,13 @@ export {
   getProofMailtoRecipient,
   openInvoiceMailto,
   openProofMailto,
+  buildQuittanceProof,
+  createQuittanceProofPdf,
+  isQuittanceProof,
+  renderQuittanceProofHtml,
+  QUITTANCE_PROOF_VERSION,
 };
+export type { QuittanceProof, QuittanceProofResult };
 
 const HTML_ESCAPE_CHARACTERS: Record<string, string> = {
   '&': '&amp;',
@@ -55,10 +71,31 @@ interface Invoice {
   createdAt: string;
   expiresAt: string;
   paidAt?: string;
+  cancelledAt?: string;
+  settledAt?: string;
+  settlementContext?: 'ON_TIME' | 'AFTER_EXPIRY' | 'AFTER_CANCEL';
+  priorStatus?: string;
+  latePaymentWarningCode?: 'PAYMENT_RECEIVED_AFTER_EXPIRY' | 'PAYMENT_RECEIVED_AFTER_CANCEL';
   memo: string;
   sellerPublicKey: string;
   payerPublicKey?: string;
   paymentTxHash?: string;
+}
+
+function latePaymentWarning(invoice: Invoice): { title: string; body: string } | null {
+  if (invoice.latePaymentWarningCode === 'PAYMENT_RECEIVED_AFTER_CANCEL') {
+    return {
+      title: 'Payment received after cancellation',
+      body: 'This transaction proves funds reached the seller. Contact the seller to reconcile the payment.',
+    };
+  }
+  if (invoice.latePaymentWarningCode === 'PAYMENT_RECEIVED_AFTER_EXPIRY') {
+    return {
+      title: 'Payment received after invoice expiry',
+      body: 'This transaction proves funds reached the seller after the original payment window.',
+    };
+  }
+  return null;
 }
 
 export function generateInvoiceCSV(invoices: Invoice[]): string {
@@ -125,10 +162,21 @@ export function downloadInvoiceCSV(invoices: Invoice[], filename?: string) {
   URL.revokeObjectURL(url);
 }
 
-export function generateInvoicePDF(invoice: Invoice): string {
+/**
+ * Generate print-ready HTML for an invoice or canonical quittance proof.
+ *
+ * @param invoiceOrProof - Invoice record or canonical QuittanceProof model.
+ * @returns HTML document string for display or PDF printing.
+ */
+export function generateInvoicePDF(invoiceOrProof: Invoice | QuittanceProof): string {
+  if (isQuittanceProof(invoiceOrProof)) {
+    return renderQuittanceProofHtml(invoiceOrProof);
+  }
+  const invoice = invoiceOrProof;
   assertPaymentProofAvailable(invoice);
   const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK === 'TESTNET' ? 'Testnet' : 'Mainnet';
   const isPaid = invoice.status === 'PAID';
+  const warning = latePaymentWarning(invoice);
 
   return `
 <!DOCTYPE html>
@@ -276,6 +324,19 @@ export function generateInvoicePDF(invoice: Invoice): string {
       color: #92400e; 
       line-height: 1.4; 
     }
+    .late-warning {
+      background: #fffbeb;
+      border: 1px solid #fbbf24;
+      border-left: 3px solid #d97706;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 15px;
+    }
+    .late-warning p {
+      font-size: 10px;
+      color: #92400e;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
@@ -306,7 +367,7 @@ export function generateInvoicePDF(invoice: Invoice): string {
         <div class="info-label">Expires</div>
         <div class="info-value">${format(new Date(invoice.expiresAt), 'MMM dd, yyyy')}</div>
       </div>
-      ${isPaid ? `<div class="info-row"><div class="info-label">Payment Date</div><div class="info-value">${format(new Date(invoice.paidAt!), 'MMM dd, yyyy HH:mm')}</div></div>` : ''}
+      ${isPaid ? `<div class="info-row"><div class="info-label">Payment Date</div><div class="info-value">${format(new Date(invoice.settledAt || invoice.paidAt!), 'MMM dd, yyyy HH:mm')}</div></div>` : ''}
     </div>
   </div>
 
@@ -329,6 +390,8 @@ export function generateInvoicePDF(invoice: Invoice): string {
     <div class="amount-value">${invoice.amount}</div>
     <div class="amount-asset">${escapeHtml(invoice.assetCode)}</div>
   </div>
+
+  ${warning ? `<div class="late-warning"><p><strong>${escapeHtml(warning.title)}</strong></p><p>${escapeHtml(warning.body)}</p></div>` : ''}
 
   ${invoice.description ? `<div class="info-section" style="margin-bottom: 20px;"><h3>Description</h3><p style="color: #1f2937; line-height: 1.6;">${escapeHtml(invoice.description)}</p></div>` : ''}
 
@@ -368,16 +431,27 @@ export function generateInvoicePDF(invoice: Invoice): string {
 </html>`;
 }
 
-export function openInvoicePDF(invoice: Invoice) {
-  const pdfContent = generateInvoicePDF(invoice);
-  
-  // Open in new window for PDF printing
+/**
+ * Generate print-ready HTML for a canonical quittance proof document.
+ *
+ * @param proof - Canonical quittance proof model.
+ * @returns HTML document string for display or PDF printing.
+ */
+export function generateQuittanceProofPDF(proof: QuittanceProof): string {
+  return renderQuittanceProofHtml(proof);
+}
+
+/**
+ * Open invoice or canonical proof in a new window to trigger the system print dialog.
+ *
+ * @param invoiceOrProof - Invoice record or canonical QuittanceProof model.
+ */
+export function openInvoicePDF(invoiceOrProof: Invoice | QuittanceProof) {
+  const pdfContent = generateInvoicePDF(invoiceOrProof);
   const printWindow = window.open('', '_blank', 'width=800,height=600');
   if (printWindow) {
     printWindow.document.write(pdfContent);
     printWindow.document.close();
-    
-    // Auto-trigger print dialog after content loads
     printWindow.onload = () => {
       setTimeout(() => {
         printWindow.print();
@@ -393,4 +467,3 @@ export function shareInvoiceByEmail(invoice: Invoice, baseUrl?: string): string 
 export function emailPaymentProof(invoice: Invoice, baseUrl?: string): string {
   return openProofMailto(invoice, baseUrl);
 }
-

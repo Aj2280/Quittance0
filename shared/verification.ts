@@ -40,10 +40,12 @@ export type VerificationCode =
   | 'INVALID_PAYER_NAME'
   | 'INVALID_PAYER_EMAIL'
   | 'PAYER_INFO_TOO_LONG'
+  | 'VERIFY_RATE_LIMIT_EXCEEDED'
   | 'INVOICE_ALREADY_PAID'
   | 'INVOICE_EXPIRED'
   | 'INVOICE_NOT_PENDING'
   | 'TRANSACTION_NOT_FOUND'
+  | 'TRANSACTION_CLOSE_TIME_UNAVAILABLE'
   | 'NO_PAYMENT_OPERATION'
   | 'MEMO_MISMATCH'
   | 'DESTINATION_MISMATCH'
@@ -74,10 +76,12 @@ export const VERIFICATION_MESSAGES: Record<VerificationCode, string> = {
   INVALID_PAYER_NAME: 'Payer name must be text',
   INVALID_PAYER_EMAIL: 'Payer email is invalid',
   PAYER_INFO_TOO_LONG: 'Payer information is too long',
+  VERIFY_RATE_LIMIT_EXCEEDED: 'Too many verification attempts for this invoice',
   INVOICE_ALREADY_PAID: 'Invoice has already been paid',
   INVOICE_EXPIRED: 'Invoice has expired and can no longer accept payment',
   INVOICE_NOT_PENDING: 'Invoice is not pending',
   TRANSACTION_NOT_FOUND: 'Transaction not found on Stellar',
+  TRANSACTION_CLOSE_TIME_UNAVAILABLE: 'Transaction close time is unavailable; try verification again later',
   NO_PAYMENT_OPERATION: 'No payment operation found in transaction',
   MEMO_MISMATCH: 'Memo mismatch',
   DESTINATION_MISMATCH: 'Payment destination mismatch',

@@ -45,24 +45,31 @@ let horizonResponder: (path: string) => { status: number; body: unknown };
 
 let horizon: http.Server;
 let app: Application;
+let createRequestSequence = 0;
 
 function jsonRequest(
   port: number,
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  headers: Record<string, string | number> = {}
 ): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? undefined : JSON.stringify(body);
+    const requestHeaders = payload
+      ? {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(payload),
+          ...headers,
+        }
+      : headers;
     const request = http.request(
       {
         host: '127.0.0.1',
         port,
         method,
         path,
-        headers: payload
-          ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }
-          : {},
+        headers: requestHeaders,
       },
       (response) => {
         let raw = '';
@@ -133,12 +140,20 @@ function paymentOn(overrides: {
 }
 
 async function createInvoice(port: number, amount = 25) {
-  const created = await jsonRequest(port, 'POST', '/api/invoices', {
-    amount,
-    assetCode: 'XLM',
-    description: 'Integration test invoice',
-    sellerPublicKey: SELLER,
-  });
+  const created = await jsonRequest(
+    port,
+    'POST',
+    '/api/invoices',
+    {
+      amount,
+      assetCode: 'XLM',
+      description: 'Integration test invoice',
+      sellerPublicKey: SELLER,
+    },
+    {
+      'x-forwarded-for': `203.0.113.${++createRequestSequence}`,
+    }
+  );
 
   assert.equal(created.status, 201, `invoice creation failed: ${JSON.stringify(created.body)}`);
   return created.body.data.invoice as { id: string; memo: string; status: string };

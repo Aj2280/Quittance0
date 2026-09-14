@@ -70,6 +70,8 @@ export function createInvoiceRouter(options: InvoiceRouterOptions): Router {
   router.get('/invoices', ...getInvoicesMiddlewares, handlers.getInvoices);
 
   router.get('/invoices/:id', handlers.getInvoice);
+
+  // GET /invoices/:id/payment-info - Payment info (no rate limit, needed for checkout)
   router.get('/invoices/:id/payment-info', handlers.getPaymentInfo);
 
   const cancelMiddlewares: RequestHandler[] = [];

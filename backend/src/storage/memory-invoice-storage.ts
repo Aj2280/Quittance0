@@ -1,7 +1,7 @@
 import { InvoiceMemoryService } from '../services/invoice-memory.service';
 import { CreateInvoiceInput } from '../utils/validation';
 import type { InvoiceStats } from './invoice-stats';
-import type { InvoiceStorage, PayerInfo, StoredInvoice } from './invoice-storage';
+import type { InvoiceStorage, MarkAsPaidOptions, PayerInfo, StoredInvoice } from './invoice-storage';
 
 export class MemoryInvoiceStorage implements InvoiceStorage {
   readonly mode = 'in-memory';
@@ -34,9 +34,10 @@ export class MemoryInvoiceStorage implements InvoiceStorage {
     id: string,
     txHash: string,
     payerPublicKey: string,
-    payerInfo?: PayerInfo
+    payerInfo?: PayerInfo,
+    options?: MarkAsPaidOptions
   ): Promise<StoredInvoice> {
-    return this.service.markAsPaid(id, txHash, payerPublicKey, payerInfo);
+    return this.service.markAsPaid(id, txHash, payerPublicKey, payerInfo, options);
   }
 
   async getInvoiceStats(sellerPublicKey: string): Promise<InvoiceStats[]> {

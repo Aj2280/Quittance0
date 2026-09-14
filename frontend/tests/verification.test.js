@@ -89,16 +89,19 @@ test('covers every rejection code with a message', () => {
     'INVALID_PAYER_NAME',
     'INVALID_PAYER_EMAIL',
     'PAYER_INFO_TOO_LONG',
+    'VERIFY_RATE_LIMIT_EXCEEDED',
     'INVOICE_ALREADY_PAID',
     'INVOICE_EXPIRED',
     'INVOICE_NOT_PENDING',
     'TRANSACTION_NOT_FOUND',
+    'TRANSACTION_CLOSE_TIME_UNAVAILABLE',
     'NO_PAYMENT_OPERATION',
     'MEMO_MISMATCH',
     'DESTINATION_MISMATCH',
     'AMOUNT_MISMATCH',
     'ASSET_MISMATCH',
     'NETWORK_MISMATCH',
+    'TX_HASH_ALREADY_USED',
   ];
 
   assert.deepEqual(Object.keys(VERIFICATION_MESSAGES).sort(), codes.sort());

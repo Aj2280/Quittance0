@@ -6,5 +6,13 @@ export async function resolve(specifier, context, nextResolve) {
     };
   }
 
+  if (specifier === './quittance-proof' || specifier === './quittance-proof.js') {
+    return nextResolve(new URL('../frontend/lib/quittance-proof.ts', import.meta.url).href, context);
+  }
+
+  if (specifier === './explorer-tx-link' || specifier === './explorer-tx-link.js') {
+    return nextResolve(new URL('../frontend/lib/explorer-tx-link.ts', import.meta.url).href, context);
+  }
+
   return nextResolve(specifier, context);
 }
