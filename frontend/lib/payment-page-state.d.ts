@@ -40,6 +40,7 @@ export type PaymentEvent =
   | { type: 'VERIFY_STARTED' }
   | { type: 'VERIFY_SUCCEEDED'; invoice?: PayInvoice | null; txHash?: string }
   | { type: 'VERIFY_FAILED'; error?: string }
+  | { type: 'VERIFY_UNAVAILABLE' }
   | { type: 'RESET' };
 
 export interface PayerDetails {
