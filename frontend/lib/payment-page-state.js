@@ -36,7 +36,7 @@ const PAY_STATES = Object.freeze({
 const TERMINAL_STATES = Object.freeze([PAY_STATES.PAID, PAY_STATES.EXPIRED]);
 const { isTerminalPayState } = require('./pay-terminal-guard.ts');
 const { effectiveInvoiceStatus, hasInvoiceExpired } = require('./invoice-lifecycle');
-const { walletGate } = require('./freighter-availability');
+const { walletSessionGate } = require('./wallet-session');
 // The canonical code -> message table. describeVerifyError resolves the
 // backend's stable rejection code through it, so a payer reads the same
 // sentence here as on every other surface.
@@ -86,7 +86,7 @@ function getPayPageWalletGate(invoice, session, expectedNetwork, now) {
     };
   }
 
-  return walletGate(session, expectedNetwork);
+  return walletSessionGate(session, expectedNetwork);
 }
 
 /** Maps an invoice status onto the state it forces, or null if it forces none. */

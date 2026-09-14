@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiErrorMessage, invoiceApi, isApiUnavailableError } from '@/lib/api';
 import { toast } from 'sonner';
 import { Loader2, AlertTriangle } from 'lucide-react';
@@ -10,10 +10,11 @@ import { NETWORK_DISPLAY_NAME } from '@/lib/stellar';
 import { showFreighterWrongNetworkPrompt } from './FreighterInstallPrompt';
 import AssetLogo from './AssetLogo';
 import ApiErrorState from './ApiErrorState';
-import { walletGate } from '@/lib/freighter-availability';
+import { walletSessionGate } from '@/lib/wallet-session';
 import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
 import { showFreighterInstallPrompt } from './FreighterInstallPrompt';
 import { parseAmountInput } from '@/lib/parse-amount-input';
+import { clearInvoiceDraft, loadInvoiceDraft, saveInvoiceDraft } from '@/lib/invoice-draft';
 
 interface InvoiceFormProps {
   onSuccess?: (invoice: any) => void;
@@ -23,22 +24,53 @@ interface InvoiceFormProps {
 export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps) {
   const { publicKey, connected, network, freighterAvailable } = useWalletStore();
   const [loading, setLoading] = useState(false);
-  const [amount, setAmount] = useState('');
-  const [assetCode, setAssetCode] = useState('XLM');
-  const [description, setDescription] = useState('');
-  const [sellerName, setSellerName] = useState('');
-  const [sellerEmail, setSellerEmail] = useState('');
-  const [customerName, setCustomerName] = useState('');
-  const [customerEmail, setCustomerEmail] = useState('');
+  // The page renders this form only while the wallet gate is ready, so a
+  // Freighter disconnect unmounts it. The draft is read once on mount so the
+  // fields someone had typed come back; only typed fields are stored, never
+  // anything about the wallet (issue #442, lib/invoice-draft.js).
+  const [initialDraft] = useState(() => loadInvoiceDraft());
+  const [amount, setAmount] = useState(initialDraft.amount ?? '');
+  const [assetCode, setAssetCode] = useState(initialDraft.assetCode ?? 'XLM');
+  const [description, setDescription] = useState(initialDraft.description ?? '');
+  const [sellerName, setSellerName] = useState(initialDraft.sellerName ?? '');
+  const [sellerEmail, setSellerEmail] = useState(initialDraft.sellerEmail ?? '');
+  const [customerName, setCustomerName] = useState(initialDraft.customerName ?? '');
+  const [customerEmail, setCustomerEmail] = useState(initialDraft.customerEmail ?? '');
   const [apiError, setApiError] = useState<string | null>(null);
-  const [expiresInDays, setExpiresInDays] = useState(7);
+  const [expiresInDays, setExpiresInDays] = useState(initialDraft.expiresInDays ?? 7);
   const { isWrongNetwork } = useWalletStore();
+
+  // Whatever is typed is kept for the next mount, so a disconnect in the middle
+  // of filling the form costs nothing.
+  useEffect(() => {
+    saveInvoiceDraft({
+      amount,
+      assetCode,
+      description,
+      sellerName,
+      sellerEmail,
+      customerName,
+      customerEmail,
+      expiresInDays,
+    });
+  }, [
+    amount,
+    assetCode,
+    description,
+    sellerName,
+    sellerEmail,
+    customerName,
+    customerEmail,
+    expiresInDays,
+  ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const sellerWallet = userWallet || publicKey || undefined;
-    const gate = walletGate(
+    // The session module normalises the store first, so a store that claims
+    // connected without a public key cannot enable the submit button.
+    const gate = walletSessionGate(
       { freighterAvailable, connected, publicKey: sellerWallet, network },
       EXPECTED_WALLET_NETWORK
     );
@@ -100,6 +132,8 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
       setCustomerName('');
       setCustomerEmail('');
       setExpiresInDays(7);
+      // The invoice exists now, so the draft has served its purpose.
+      clearInvoiceDraft();
     } catch (error: any) {
       const message = apiErrorMessage(error, 'Failed to create invoice');
       if (isApiUnavailableError(error)) setApiError(message);
