@@ -113,9 +113,13 @@ export function usePaymentPage(id: string) {
         return;
       }
 
+      const code =
+        (error && error.response && error.response.data && error.response.data.code) ||
+        (error && error.code) ||
+        undefined;
       const message = resolveVerificationError(error);
       if (isApiUnavailableError(error)) setLoadError(apiErrorMessage(error));
-      dispatch({ type: 'VERIFY_FAILED', error: message });
+      dispatch({ type: 'VERIFY_FAILED', error: message, code });
       toast.error(message);
     }
   };

@@ -80,8 +80,9 @@ function rejectionLabel(code: string | null | undefined, fallback?: string): str
   return typeof fallback === 'string' ? fallback : UNKNOWN_LABEL;
 }
 
-module.exports = {
+export {
   REJECTION_LABELS,
   rejectionLabel,
-  default: rejectionLabel,
 };
+
+export default rejectionLabel;

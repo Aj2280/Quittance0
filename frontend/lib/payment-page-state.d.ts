@@ -14,6 +14,7 @@ export interface PaymentState {
   invoice: PayInvoice | null;
   txHash: string | null;
   error: string | null;
+  code?: string | null;
 }
 
 export interface WalletGateSession {
@@ -39,7 +40,7 @@ export type PaymentEvent =
   | { type: 'PAY_FAILED'; error?: string }
   | { type: 'VERIFY_STARTED' }
   | { type: 'VERIFY_SUCCEEDED'; invoice?: PayInvoice | null; txHash?: string }
-  | { type: 'VERIFY_FAILED'; error?: string }
+  | { type: 'VERIFY_FAILED'; error?: string; code?: string }
   | { type: 'VERIFY_UNAVAILABLE' }
   | { type: 'RESET' };
 

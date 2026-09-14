@@ -23,6 +23,26 @@ Checks run in a fixed order so every caller reports the same *first* failure:
 6. **Amount** — compared at Stellar's 7-decimal precision (`AMOUNT_MISMATCH`)
 7. **Asset** — code *and* issuer (`ASSET_MISMATCH`)
 
+## Amount matching and overpayment policy
+
+Amount matching runs at Stellar protocol precision (7 decimals, 1 stroop = `0.0000001`) using integer arithmetic (`backend/src/utils/safe-amount-compare.ts`) to avoid IEEE 754 floating-point rounding inaccuracies.
+
+### Underpayment policy
+- **Strictly rejected**: Underpayments (where `actual < expected`) are rejected with `AMOUNT_MISMATCH`.
+- **No partial settlement**: An underpayment never transitions an invoice to `PAID`. The invoice remains in `PENDING` status.
+- **Client feedback**: The payment page surfaces the rejection reason and displays the `Amount mismatch` chip (`rejectionLabel`), advising the user that the payment amount was insufficient.
+
+### Overpayment policy
+- **Strictly rejected**: Overpayments (where `actual > expected`) are also rejected with `AMOUNT_MISMATCH`.
+- **Rationale**: Stellar transactions are irrevocable. Invoicing, accounting, automated receipts, and tax compliance require exact settlement. Allowing overpayments leads to accounting liabilities, tax discrepancies, and automated refund management complexities.
+- **Exact match requirement**: The payment amount must match the invoice amount exactly down to 7 decimal places (stroop precision, zero-tolerance by default).
+
+| Expected | Actual | Result | Code | Status Transition |
+| --- | --- | --- | --- | --- |
+| `10.0000000` | `9.9999999` | Underpayment | `AMOUNT_MISMATCH` | Remains `PENDING` |
+| `10.0000000` | `10.0000000` | Exact match | Success | Transitions to `PAID` |
+| `10.0000000` | `10.0000001` | Overpayment | `AMOUNT_MISMATCH` | Remains `PENDING` |
+
 ## Asset matching
 
 This is the check that most often looks simpler than it is. A Stellar asset is

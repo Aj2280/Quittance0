@@ -113,8 +113,7 @@ identically for the same rejection. `VERIFICATION_CODES` and `messageForCode`
 are exported from `backend/src/services/payment-verification.ts` as well, so a
 test pins the two layers together.
 
-Amounts compare at Stellar's 7-decimal (stroop) precision, so `100` and
-`100.0000000` match while a partial payment does not.
+Amounts compare at Stellar's 7-decimal (stroop) precision using integer arithmetic, so `100` and `100.0000000` match exactly. Underpayments strictly fail with `AMOUNT_MISMATCH` and never transition an invoice to `PAID`. Overpayments are also rejected with `AMOUNT_MISMATCH` to preserve strict accounting records and prevent untracked tax/refund liabilities (see [VERIFY.md](./docs/VERIFY.md#amount-matching-and-overpayment-policy)).
 
 Run the checks: `cd backend && npm test` — `cd frontend && npm test`.
 

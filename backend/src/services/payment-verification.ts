@@ -17,6 +17,11 @@ import {
   resolvePaymentAsset,
 } from '../utils/asset-helpers';
 import { amountsMatch as stroopAmountsMatch } from '../utils/verify-amount-tolerance';
+import {
+  describeAmountDelta,
+  isUnderpaid,
+  isOverpaid,
+} from '../utils/safe-amount-compare';
 import { parseSettlementTime } from '../domain/invoice-settlement';
 
 import {
@@ -285,6 +290,35 @@ export function amountsMatch(actual: unknown, expected: string | number): boolea
 }
 
 /**
+ * Returns true if the observed payment amount is less than expected (underpayment).
+ */
+export function isPaymentUnderpaid(actual: unknown, expected: string | number): boolean {
+  return isUnderpaid(expected, actual, 0);
+}
+
+/**
+ * Returns true if the observed payment amount exceeds the expected amount (overpayment).
+ */
+export function isPaymentOverpaid(actual: unknown, expected: string | number): boolean {
+  return isOverpaid(expected, actual, 0);
+}
+
+/**
+ * Validates that an observed payment amount matches the invoice amount exactly.
+ * Rejects underpayments and overpayments with AMOUNT_MISMATCH.
+ */
+export function checkPaymentAmount(
+  actual: unknown,
+  expected: string | number
+): VerificationResult<null> {
+  const delta = describeAmountDelta(expected, actual);
+  if (delta.status === 'underpaid' || delta.status === 'overpaid' || delta.status === 'invalid') {
+    return failure('AMOUNT_MISMATCH');
+  }
+  return { ok: true, value: null };
+}
+
+/**
  * Verify a Horizon transaction against what an invoice expects.
  *
  * Checks run in a fixed order so every caller reports the same first failure:
@@ -315,8 +349,9 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
     return failure('DESTINATION_MISMATCH');
   }
 
-  if (!amountsMatch(paymentOp.amount, expected.amount)) {
-    return failure('AMOUNT_MISMATCH');
+  const amountCheck = checkPaymentAmount(paymentOp.amount, expected.amount);
+  if (!amountCheck.ok) {
+    return amountCheck;
   }
 
   const invoiceAsset = resolveInvoiceAsset({

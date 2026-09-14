@@ -11,6 +11,7 @@ import {
   type PaymentState,
 } from '@/lib/payment-page-state';
 import { PAYMENT_RESULT_ID, announcementPoliteness, announcementRole } from '@/lib/a11y';
+import { rejectionLabel } from '@/lib/verify-rejection-label';
 
 interface PaymentResultPanelProps {
   state: PaymentState;
@@ -73,6 +74,12 @@ export default function PaymentResultPanel({ state, children }: PaymentResultPan
     }
   })();
 
+  const rejectionCode =
+    state.status === PAY_STATES.ERROR
+      ? state.code || (state.error?.toLowerCase().includes('amount mismatch') ? 'AMOUNT_MISMATCH' : undefined)
+      : undefined;
+  const label = rejectionCode ? rejectionLabel(rejectionCode) : null;
+
   return (
     <div
       id={PAYMENT_RESULT_ID}
@@ -89,6 +96,16 @@ export default function PaymentResultPanel({ state, children }: PaymentResultPan
         {icon}
         <div>
           <p className="font-semibold text-gray-900">{message}</p>
+          {label && (
+            <div className="mt-1.5">
+              <span
+                data-testid="rejection-label"
+                className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-200"
+              >
+                {label}
+              </span>
+            </div>
+          )}
           {children}
         </div>
       </div>

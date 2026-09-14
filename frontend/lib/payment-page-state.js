@@ -37,6 +37,7 @@ const TERMINAL_STATES = Object.freeze([PAY_STATES.PAID, PAY_STATES.EXPIRED]);
 const { isTerminalPayState } = require('./pay-terminal-guard.ts');
 const { effectiveInvoiceStatus, hasInvoiceExpired } = require('./invoice-lifecycle');
 const { walletGate } = require('./freighter-availability');
+const { messageForCode } = require('./verification');
 
 const asInvoice = (statusOrInvoice) =>
   statusOrInvoice && typeof statusOrInvoice === 'object'
@@ -99,6 +100,7 @@ function initialPaymentState(invoice) {
     invoice: invoice ?? null,
     txHash: invoice?.paymentTxHash ?? null,
     error: null,
+    code: null,
   };
 }
 
@@ -164,7 +166,12 @@ function paymentReducer(state, event) {
 
     case 'VERIFY_FAILED':
       if (isTerminalPayState(state.status)) return state;
-      return { ...state, status: PAY_STATES.ERROR, error: event.error ?? 'Verification failed' };
+      return {
+        ...state,
+        status: PAY_STATES.ERROR,
+        error: event.error ?? 'Verification failed',
+        code: event.code ?? null,
+      };
 
     // An outage is not a rejection. Return to idle so the payer keeps the
     // verify control and the rest of the session, instead of being told the

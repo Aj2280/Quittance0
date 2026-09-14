@@ -1,3 +1,5 @@
+process.env.TZ = process.env.TZ || 'America/New_York';
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
