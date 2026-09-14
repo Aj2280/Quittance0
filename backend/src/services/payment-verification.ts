@@ -17,6 +17,7 @@ import {
   resolvePaymentAsset,
 } from '../utils/asset-helpers';
 import { amountsMatch as stroopAmountsMatch } from '../utils/verify-amount-tolerance';
+import { describeAmountDelta } from '../utils/safe-amount-compare';
 import { parseSettlementTime } from '../domain/invoice-settlement';
 
 import {
@@ -285,6 +286,29 @@ export function amountsMatch(actual: unknown, expected: string | number): boolea
 }
 
 /**
+ * Which rejection code an amount that misses the invoice earns.
+ *
+ * The acceptance window stays at zero stroops: an invoice is paid in full or
+ * it is not. Underpayment and overpayment are still different events for the
+ * payer - one leaves the invoice PENDING with money already sent, the other
+ * pays more than was asked - so they carry different codes and different
+ * sentences instead of sharing one amount mismatch.
+ *
+ * The delta classification already exists at stroop precision, so this reuses
+ * it rather than re-deriving the comparison. An amount that cannot be parsed
+ * stays on the generic code.
+ */
+export function amountRejectionCode(
+  actual: unknown,
+  expected: string | number
+): VerificationCode {
+  const delta = describeAmountDelta(expected, actual);
+  if (delta.status === 'underpaid') return 'AMOUNT_TOO_LOW';
+  if (delta.status === 'overpaid') return 'AMOUNT_TOO_HIGH';
+  return 'AMOUNT_MISMATCH';
+}
+
+/**
  * Verify a Horizon transaction against what an invoice expects.
  *
  * Checks run in a fixed order so every caller reports the same first failure:
@@ -316,7 +340,7 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
   }
 
   if (!amountsMatch(paymentOp.amount, expected.amount)) {
-    return failure('AMOUNT_MISMATCH');
+    return failure(amountRejectionCode(paymentOp.amount, expected.amount));
   }
 
   const invoiceAsset = resolveInvoiceAsset({

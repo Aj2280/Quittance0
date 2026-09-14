@@ -21,6 +21,8 @@ const KNOWN_CODE_FIXTURES = [
   { code: 'MEMO_MISMATCH', label: 'Memo mismatch' },
   { code: 'DESTINATION_MISMATCH', label: 'Destination mismatch' },
   { code: 'AMOUNT_MISMATCH', label: 'Amount mismatch' },
+  { code: 'AMOUNT_TOO_LOW', label: 'Amount below invoice' },
+  { code: 'AMOUNT_TOO_HIGH', label: 'Amount above invoice' },
   { code: 'ASSET_MISMATCH', label: 'Asset mismatch' },
   { code: 'NETWORK_MISMATCH', label: 'Network mismatch' },
   { code: 'TX_HASH_ALREADY_USED', label: 'Transaction already used' },

@@ -50,11 +50,22 @@ export type VerificationCode =
   | 'MEMO_MISMATCH'
   | 'DESTINATION_MISMATCH'
   | 'AMOUNT_MISMATCH'
+  | 'AMOUNT_TOO_LOW'
+  | 'AMOUNT_TOO_HIGH'
   | 'ASSET_MISMATCH'
   | 'NETWORK_MISMATCH'
   | 'TX_HASH_ALREADY_USED';
 
-/** The rejection code each check produces when it fails. */
+/**
+ * The rejection code each check produces when it fails.
+ *
+ * `amount` is the one check with more than one outcome. Underpayment and
+ * overpayment are separate codes (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`) and
+ * `AMOUNT_MISMATCH` is what the check returns when the amount cannot be
+ * compared at all, such as a non-numeric or missing value. Keeping that
+ * fallback here means the map still answers which code each check in the
+ * pipeline produces.
+ */
 export const CHECK_REJECTION_CODES: Record<VerificationCheck, VerificationCode> = {
   memo: 'MEMO_MISMATCH',
   destination: 'DESTINATION_MISMATCH',
@@ -86,6 +97,8 @@ export const VERIFICATION_MESSAGES: Record<VerificationCode, string> = {
   MEMO_MISMATCH: 'Memo mismatch',
   DESTINATION_MISMATCH: 'Payment destination mismatch',
   AMOUNT_MISMATCH: 'Amount mismatch',
+  AMOUNT_TOO_LOW: 'Payment is less than the invoice amount',
+  AMOUNT_TOO_HIGH: 'Payment is more than the invoice amount',
   ASSET_MISMATCH: 'Asset mismatch',
   NETWORK_MISMATCH: 'Transaction is on a different Stellar network',
   TX_HASH_ALREADY_USED: 'Transaction already settled another invoice',

@@ -275,8 +275,9 @@ describe('invoice payment loop', () => {
     });
 
     assert.equal(verified.status, 400);
-    assert.equal(verified.body.code, 'AMOUNT_MISMATCH');
+    assert.equal(verified.body.code, 'AMOUNT_TOO_LOW');
     assert.match(verified.body.error, /amount/i);
+    assert.match(verified.body.error, /less than/i);
   });
 
   it('refuses a payment in the wrong asset', async () => {

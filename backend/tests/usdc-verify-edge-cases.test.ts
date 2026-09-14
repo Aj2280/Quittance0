@@ -143,7 +143,7 @@ describe('USDC verification check ordering', () => {
     }
   });
 
-  it('prioritizes amount mismatch before asset mismatch', () => {
+  it('reports the shortfall when the amount is wrong and the asset differs too', () => {
     const result = verifyHorizonPayment({
       txHash: REAL_TESTNET_TX_USDC_20,
       network: 'TESTNET',
@@ -172,7 +172,7 @@ describe('USDC verification check ordering', () => {
 
     assert.equal(result.ok, false);
     if (!result.ok) {
-      assert.equal(result.code, 'AMOUNT_MISMATCH');
+      assert.equal(result.code, 'AMOUNT_TOO_LOW');
     }
   });
 });
