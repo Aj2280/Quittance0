@@ -55,9 +55,17 @@ app.get('/', (req: Request, res: Response) => {
   });
 });
 
-// Health check
+// Liveness probes (process up, cold-start safe, no external dependency)
 app.get('/api/health', healthHandler(memoryInvoiceStorage.mode));
+app.get('/api/health/live', healthHandler(memoryInvoiceStorage.mode));
+app.get('/health', healthHandler(memoryInvoiceStorage.mode));
+app.get('/healthz', healthHandler(memoryInvoiceStorage.mode));
+
+// Readiness probes (traffic routing, critical config validation, optional Horizon ping)
 app.get('/api/ready', readinessHandler(memoryInvoiceStorage.mode));
+app.get('/api/health/ready', readinessHandler(memoryInvoiceStorage.mode));
+app.get('/ready', readinessHandler(memoryInvoiceStorage.mode));
+app.get('/readyz', readinessHandler(memoryInvoiceStorage.mode));
 
 app.use('/api', createInvoiceRouter({ storage: memoryInvoiceStorage }));
 app.use('/api', createPaymentMonitorRouter(paymentMonitorService));
