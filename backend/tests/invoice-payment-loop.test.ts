@@ -278,7 +278,13 @@ describe('invoice payment loop', () => {
     assert.equal(verified.body.code, 'AMOUNT_TOO_LOW');
     assert.match(verified.body.error, /amount/i);
     assert.match(verified.body.error, /less than/i);
+
+    // The invoice is the thing that must not move: a shortfall is not a payment.
+    const fetched = await jsonRequest(port, 'GET', '/api/invoices/' + invoice.id);
+    assert.equal(fetched.body.data.status, 'PENDING', 'an underpayment must not settle the invoice');
+    assert.equal(fetched.body.data.paymentTxHash, undefined);
   });
+
 
   it('refuses a payment in the wrong asset', async () => {
     const invoice = await createInvoice(port);
