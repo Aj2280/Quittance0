@@ -73,6 +73,33 @@ export function sendFailure(res: Response, status: number, error: string): void 
   res.status(status).json(apiFailure(error));
 }
 
+/**
+ * The envelope a refused payload is returned in.
+ *
+ * The error string stays the single sentence every client already reads;
+ * fieldErrors is the same information keyed by payload field, so a form can
+ * mark the inputs instead of showing one toast that names nothing.
+ */
+export interface ValidationFailureBody {
+  success: false;
+  code: 'VALIDATION_ERROR';
+  error: string;
+  fieldErrors: Record<string, string>;
+}
+
+export function sendValidationFailure(
+  res: Response,
+  error: string,
+  fieldErrors: Record<string, string>
+): void {
+  res.status(400).json({
+    success: false,
+    code: 'VALIDATION_ERROR',
+    error,
+    fieldErrors,
+  });
+}
+
 export function sendVerificationFailure(
   res: Response,
   status: number,

@@ -11,7 +11,12 @@
  * See `docs/ASSETS.md`.
  */
 
-export const NATIVE_ASSET_CODE = 'XLM';
+import {
+  NATIVE_ASSET_CODE,
+  requiresAssetIssuer,
+} from '../../../shared/invoice-validation';
+
+export { NATIVE_ASSET_CODE };
 
 /** Either the native asset, or a credit asset pinned to its issuer. */
 export type AssetIdentity =
@@ -101,9 +106,9 @@ export function formatAssetIdentity(asset: AssetIdentity): string {
 }
 
 /** True when a code names a credit asset and therefore requires an issuer. */
+/** Delegates to the shared rule so creation and the form agree. */
 export function requiresIssuer(assetCode?: string): boolean {
-  const code = (assetCode ?? '').trim();
-  return code.length > 0 && code !== NATIVE_ASSET_CODE;
+  return requiresAssetIssuer(assetCode);
 }
 
 export default {

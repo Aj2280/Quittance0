@@ -5,6 +5,14 @@ import {
   MIN_INVOICE_EXPIRY_DAYS,
 } from '../domain/invoice-expiry';
 import { NATIVE_ASSET_CODE, requiresIssuer } from './asset-helpers';
+import {
+  CREATE_INVOICE_MESSAGES,
+  MAX_DESCRIPTION_LENGTH,
+  MAX_INVOICE_AMOUNT,
+  MAX_NAME_LENGTH,
+  isStellarPublicKey,
+  isValidEmail,
+} from '../../../shared/invoice-validation';
 import { SUPPORTED_STELLAR_NETWORKS } from '../config/stellar';
 
 // Schemas used identically by both servers. Zod validates the create+verify
@@ -15,9 +23,9 @@ import { SUPPORTED_STELLAR_NETWORKS } from '../config/stellar';
 // (`{ success:false, error }`) from types/api.ts, matching the verify path's
 // `code` + `error` shape so every client reads one consistent contract.
 // Stellar public key validation
-export const stellarPublicKeySchema = z.string()
-  .length(56)
-  .regex(/^G[A-Z2-7]{55}$/, 'Invalid Stellar public key format');
+export const stellarPublicKeySchema = z
+  .string({ invalid_type_error: CREATE_INVOICE_MESSAGES.publicKeyFormat })
+  .refine(isStellarPublicKey, CREATE_INVOICE_MESSAGES.publicKeyFormat);
 
 /**
  * Invoice creation schema.
@@ -29,35 +37,66 @@ export const stellarPublicKeySchema = z.string()
  */
 export const createInvoiceSchema = z
   .object({
-    amount: z.number().positive().max(1000000000),
+    amount: z
+      .number({
+        required_error: CREATE_INVOICE_MESSAGES.amountRequired,
+        invalid_type_error: CREATE_INVOICE_MESSAGES.amountNotNumber,
+      })
+      .positive(CREATE_INVOICE_MESSAGES.amountPositive)
+      .max(MAX_INVOICE_AMOUNT, CREATE_INVOICE_MESSAGES.amountTooLarge)
+      .refine(Number.isFinite, CREATE_INVOICE_MESSAGES.amountNotFinite),
     assetCode: z.string().default('XLM').transform((val) => val.toUpperCase()).optional(),
     assetIssuer: stellarPublicKeySchema.optional(),
-    description: z.string().max(500).optional(),
-    customerName: z.string().max(255).optional(),
-    customerEmail: z.string().email().optional(),
-    sellerName: z.string().max(255).optional(),
-    sellerEmail: z.string().email().optional(),
-    network: z.enum(SUPPORTED_STELLAR_NETWORKS).optional(),
-    expiresInDays: z.number()
-      .int()
-      .min(MIN_INVOICE_EXPIRY_DAYS)
-      .max(MAX_INVOICE_EXPIRY_DAYS)
+    description: z
+      .string()
+      .max(MAX_DESCRIPTION_LENGTH, CREATE_INVOICE_MESSAGES.description)
+      .optional(),
+    customerName: z
+      .string()
+      .max(MAX_NAME_LENGTH, CREATE_INVOICE_MESSAGES.customerName)
+      .optional(),
+    customerEmail: z
+      .string()
+      .refine(isValidEmail, CREATE_INVOICE_MESSAGES.customerEmail)
+      .optional(),
+    sellerName: z
+      .string()
+      .max(MAX_NAME_LENGTH, CREATE_INVOICE_MESSAGES.sellerName)
+      .optional(),
+    sellerEmail: z
+      .string()
+      .refine(isValidEmail, CREATE_INVOICE_MESSAGES.sellerEmail)
+      .optional(),
+    network: z
+      .enum(SUPPORTED_STELLAR_NETWORKS, {
+        errorMap: () => ({ message: CREATE_INVOICE_MESSAGES.network }),
+      })
+      .optional(),
+    expiresInDays: z
+      .number()
+      .int(CREATE_INVOICE_MESSAGES.expiresInDays)
+      .min(MIN_INVOICE_EXPIRY_DAYS, CREATE_INVOICE_MESSAGES.expiresInDays)
+      .max(MAX_INVOICE_EXPIRY_DAYS, CREATE_INVOICE_MESSAGES.expiresInDays)
       .default(DEFAULT_INVOICE_EXPIRY_DAYS),
-    sellerPublicKey: stellarPublicKeySchema,
+    sellerPublicKey: z
+      .string({
+        required_error: CREATE_INVOICE_MESSAGES.sellerPublicKeyRequired,
+        invalid_type_error: CREATE_INVOICE_MESSAGES.sellerPublicKeyRequired,
+      })
+      .refine(isStellarPublicKey, CREATE_INVOICE_MESSAGES.publicKeyFormat),
   })
   .refine(
     (invoice) => !requiresIssuer(invoice.assetCode) || Boolean(invoice.assetIssuer),
     {
       path: ['assetIssuer'],
-      message:
-        'assetIssuer is required for issued assets; only XLM may omit it. An asset is identified by its code and issuer together.',
+      message: CREATE_INVOICE_MESSAGES.assetIssuerRequired,
     },
   )
   .refine(
     (invoice) => invoice.assetCode !== NATIVE_ASSET_CODE || !invoice.assetIssuer,
     {
       path: ['assetIssuer'],
-      message: 'XLM is the native asset and must not carry an issuer.',
+      message: CREATE_INVOICE_MESSAGES.assetIssuerNotAllowed,
     },
   );
 
@@ -73,6 +112,29 @@ export const paymentSchema = z.object({
 export const cancelInvoiceSchema = z.object({
   sellerPublicKey: stellarPublicKeySchema.optional(),
 });
+
+/**
+ * The failed payload as a field -> message map.
+ *
+ * Zod reports issues, not fields: the caller used to serialize the whole
+ * issue list into one error string, which a client cannot attach to an
+ * input. The first issue per field wins, and an issue with no path (the
+ * object-level refinements) lands under 'form', so nothing is dropped.
+ */
+export function createInvoiceFieldErrors(
+  error: z.ZodError
+): Record<string, string> {
+  const fieldErrors: Record<string, string> = {};
+
+  for (const issue of error.issues) {
+    const key = typeof issue.path[0] === 'string' ? issue.path[0] : 'form';
+    if (!fieldErrors[key]) {
+      fieldErrors[key] = issue.message;
+    }
+  }
+
+  return fieldErrors;
+}
 
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 export type PaymentInput = z.infer<typeof paymentSchema>;
