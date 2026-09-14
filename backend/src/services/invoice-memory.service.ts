@@ -142,8 +142,8 @@ export class InvoiceMemoryService {
     return [this.storage.getStats(sellerPublicKey)];
   }
 
-  async getInvoiceCount(): Promise<number> {
-    return this.storage.getInvoiceCount();
+  async countInvoices(): Promise<number> {
+    return this.storage.countInvoices();
   }
 }
 

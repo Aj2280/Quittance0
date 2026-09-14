@@ -16,9 +16,6 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors(corsOptions()));
 
-// Body size enforcement (before json parser)
-app.use(bodyLimitMiddleware);
-
 app.use(express.json({ limit: '16kb' }));
 app.use(express.urlencoded({ extended: true, limit: '16kb' }));
 
@@ -40,6 +37,13 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  if ((err as any).type === 'entity.too.large' || (err as any).status === 413 || (err as any).statusCode === 413) {
+    return res.status(413).json({
+      success: false,
+      code: 'PAYLOAD_TOO_LARGE',
+      error: 'Payload too large: request body exceeds 16 kB limit',
+    });
+  }
   console.error('Unhandled error:', err);
   const code = (err as Error & { code?: string }).code;
   res.status(code === 'CORS_ORIGIN_DENIED' ? 403 : 500).json({

@@ -1,65 +1,43 @@
-// Global invoice ceiling for MVP in-memory mode. Once the ceiling is reached,
-// new creates return 503 with Retry-After until older invoices expire or are
-// paid. Postgres mode has no hard ceiling (the database is the limit), but
-// this middleware can be wired there too if needed.
-//
-// The ceiling is checked before the handler runs, so no partial invoice is
-// created when the limit is hit.
-import { Request, Response, NextFunction } from 'express';
-import type { InvoiceStorage } from '../storage/invoice-storage';
+import { Request, Response, NextFunction, RequestHandler } from 'express';
 
-const DEFAULT_MVP_INVOICE_CEILING = 5000;
-const CEILING_RETRY_AFTER_SECONDS = 300; // 5 minutes
+export const DEFAULT_INVOICE_CEILING = 5000;
 
-export function invoiceCeilingMiddleware(storage: InvoiceStorage) {
-  const ceiling = parseInt(process.env.INVOICE_CEILING || '', 10) || DEFAULT_MVP_INVOICE_CEILING;
-  
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+export interface InvoiceCeilingOptions {
+  ceiling?: number;
+  retryAfterSeconds?: number;
+}
+
+/**
+ * Express middleware that enforces a global invoice storage ceiling.
+ * Rejects creation requests with 503 INVOICE_STORE_FULL when the ceiling is reached.
+ *
+ * @param getCount Function returning the current count of invoices in storage
+ * @param options Optional ceiling threshold and Retry-After delay
+ */
+export function createInvoiceCeilingMiddleware(
+  getCount: () => Promise<number> | number,
+  options?: InvoiceCeilingOptions
+): RequestHandler {
+  const ceiling =
+    options?.ceiling ??
+    (process.env.INVOICE_CEILING ? parseInt(process.env.INVOICE_CEILING, 10) : DEFAULT_INVOICE_CEILING);
+  const retryAfterSeconds = options?.retryAfterSeconds ?? 300;
+
+  return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Only apply to invoice creation
-      if (req.method !== 'POST' || !req.path.match(/^\/invoices\/?$/)) {
-        return next();
-      }
-
-      // Check current count (this assumes storage exposes a count method or getInvoices)
-      // For memory storage we can check the size directly
-      const count = await getInvoiceCount(storage);
-      
-      if (count >= ceiling) {
-        res.set('Retry-After', CEILING_RETRY_AFTER_SECONDS.toString());
-        res.status(503).json({
+      const currentCount = await getCount();
+      if (currentCount >= ceiling) {
+        res.setHeader('Retry-After', retryAfterSeconds);
+        return res.status(503).json({
           success: false,
-          error: 'Invoice storage is at capacity',
           code: 'INVOICE_STORE_FULL',
-          retryAfter: CEILING_RETRY_AFTER_SECONDS,
-          currentCount: count,
-          ceiling,
+          error: `Invoice store full: maximum invoice capacity of ${ceiling} reached`,
+          retryAfter: retryAfterSeconds,
         });
-        return;
       }
-
       next();
     } catch (error) {
-      console.error('[InvoiceCeiling] Check failed:', error);
-      // Fail open: don't block creates if the check breaks
-      next();
+      next(error);
     }
   };
 }
-
-async function getInvoiceCount(storage: InvoiceStorage): Promise<number> {
-  try {
-    if (typeof storage.getInvoiceCount === 'function') {
-      return await storage.getInvoiceCount();
-    }
-    
-    // Fallback: storage doesn't implement the method
-    console.warn('[InvoiceCeiling] Storage backend does not implement getInvoiceCount');
-    return 0;
-  } catch (error) {
-    console.error('[InvoiceCeiling] Count failed:', error);
-    return 0;
-  }
-}
-
-export default invoiceCeilingMiddleware;

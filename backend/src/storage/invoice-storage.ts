@@ -85,6 +85,6 @@ export interface InvoiceStorage {
   getInvoiceStats(sellerPublicKey: string): Promise<InvoiceStats[]>;
   /** Explicit maintenance hook; reads also apply this transition lazily. */
   markExpiredInvoices(now?: Date): Promise<number>;
-  /** Total invoice count (for ceiling enforcement). */
-  getInvoiceCount?(): Promise<number>;
+  /** Returns total count of invoices currently stored. */
+  countInvoices?(): Promise<number>;
 }

@@ -26,13 +26,7 @@ import {
 } from '../domain/invoice-settlement';
 import { cutoverDrainMode, simulationAllowed } from '../config/runtime';
 import { createRequestId } from '../utils/request-correlation-id';
-import { checkInvoiceVerifyLimit } from '../middleware/rate-limit';
-import { cacheVerificationResult } from '../middleware/verify-cache';
-import {
-  verifyCancelSignature,
-  signatureVerificationRequired,
-  extractCancelSignature,
-} from '../utils/signature-verification';
+import { verifySellerSignature } from '../utils/signature-verification';
 
 /** Kept explicit so clients can tune polling without duplicating backend policy. */
 export const PAYMENT_STATUS_POLL_INTERVAL_MS = 3000;
@@ -49,6 +43,7 @@ export interface InvoiceHandlerOptions {
   /** Optional local-test override. Production always forces simulation off. */
   allowSimulate?: boolean;
   stellar?: TransactionLookup;
+  requireCancelSignature?: boolean;
 }
 
 export interface InvoiceHandlers {
@@ -217,37 +212,30 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
       }
     },
 
-    async cancelInvoice(req: Request, res: Response) {
-      if (cutoverDrainMode()) {
-        return sendFailure(
-          res,
-          503,
-          'System is in cutover drain mode. Invoice cancellation is temporarily paused.'
-        );
-      }
+    async cancelInvoice(req: Request, res: Response): Promise<void> {
       try {
         let sellerPublicKey: string | undefined;
+        let signature: string | undefined;
 
-        // Check for signature-based authentication (preferred)
-        const signaturePayload = extractCancelSignature(req.body);
-        
-        if (signaturePayload) {
-          // Verify the cryptographic signature
-          const verification = verifyCancelSignature(signaturePayload);
-          
-          if (!verification.valid) {
-            return sendFailure(res, 401, verification.error || 'Invalid signature');
+        if (req.body && typeof req.body === 'object') {
+          if ('sellerPublicKey' in req.body) {
+            const parsed = cancelInvoiceSchema.safeParse(req.body);
+            if (!parsed.success) {
+              sendFailure(res, 400, 'Invalid Stellar public key format');
+              return;
+            }
+            sellerPublicKey = parsed.data.sellerPublicKey;
           }
-          
-          sellerPublicKey = signaturePayload.sellerPublicKey;
-        } else {
-          // Legacy path: require signature in production, allow fallback in dev
-          if (signatureVerificationRequired()) {
-            return sendFailure(
-              res,
-              401,
-              'Signature required: cancellation requires cryptographic proof of ownership'
-            );
+          if ('signature' in req.body && typeof req.body.signature === 'string') {
+            signature = req.body.signature;
+          }
+        }
+
+        if (!sellerPublicKey && req.query.sellerPublicKey) {
+          const parsed = stellarPublicKeySchema.safeParse(req.query.sellerPublicKey);
+          if (!parsed.success) {
+            sendFailure(res, 400, 'Invalid Stellar public key format');
+            return;
           }
 
           // Fallback to claimed key (legacy, insecure)
@@ -273,6 +261,74 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
             401,
             'Unauthorized: sellerPublicKey is required to cancel an invoice'
           );
+        }
+
+        if (!sellerPublicKey && req.headers?.['x-seller-public-key']) {
+          const headerKey = req.headers['x-seller-public-key'];
+          const parsed = stellarPublicKeySchema.safeParse(Array.isArray(headerKey) ? headerKey[0] : headerKey);
+          if (parsed.success) {
+            sellerPublicKey = parsed.data;
+          }
+        }
+
+        if (!signature && req.headers?.['x-signature']) {
+          const headerSig = req.headers['x-signature'];
+          signature = Array.isArray(headerSig) ? headerSig[0] : headerSig;
+        }
+
+        const requireSignature =
+          options.requireCancelSignature ?? (process.env.REQUIRE_CANCEL_SIGNATURE === 'true');
+
+        if (requireSignature) {
+          if (!sellerPublicKey || !signature) {
+            res.status(401).json({
+              success: false,
+              code: 'UNAUTHORIZED',
+              error: 'Cancellation requires seller proof of ownership (signature)',
+            });
+            return;
+          }
+        }
+
+        if (signature) {
+          if (!sellerPublicKey) {
+            res.status(401).json({
+              success: false,
+              code: 'UNAUTHORIZED',
+              error: 'Seller public key is required when providing a signature',
+            });
+            return;
+          }
+
+          const existingInvoice = await storage.getInvoiceById(req.params.id);
+          if (!existingInvoice) {
+            sendFailure(res, 404, 'Invoice not found');
+            return;
+          }
+
+          if (existingInvoice.sellerPublicKey !== sellerPublicKey) {
+            res.status(401).json({
+              success: false,
+              code: 'UNAUTHORIZED',
+              error: 'Signer is not the seller of this invoice',
+            });
+            return;
+          }
+
+          const candidateMessages = [req.params.id, `cancel:${req.params.id}`];
+          if (req.body?.message && typeof req.body.message === 'string') {
+            candidateMessages.push(req.body.message);
+          }
+
+          const isValid = verifySellerSignature(sellerPublicKey, signature, candidateMessages);
+          if (!isValid) {
+            res.status(401).json({
+              success: false,
+              code: 'INVALID_SIGNATURE',
+              error: 'Invalid signature for cancellation',
+            });
+            return;
+          }
         }
 
         const invoice = await storage.cancelInvoice(req.params.id, sellerPublicKey);

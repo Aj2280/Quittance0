@@ -48,8 +48,8 @@ export class MemoryInvoiceStorage implements InvoiceStorage {
     return this.service.markExpiredInvoices(now);
   }
 
-  async getInvoiceCount(): Promise<number> {
-    return this.service.getInvoiceCount();
+  async countInvoices(): Promise<number> {
+    return this.service.countInvoices();
   }
 }
 

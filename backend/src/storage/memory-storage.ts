@@ -240,8 +240,7 @@ class MemoryStorage {
     return this.invoices.size;
   }
 
-  // Get invoice count for ceiling enforcement
-  getInvoiceCount(): number {
+  countInvoices(): number {
     return this.invoices.size;
   }
 }

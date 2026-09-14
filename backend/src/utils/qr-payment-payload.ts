@@ -54,11 +54,12 @@ export interface QrPaymentPayload {
  * Validate that a string looks like a Stellar public key.
  */
 const isValidPublicKey = (publicKey: string): boolean => {
+  if (typeof publicKey !== 'string') return false;
   try {
     Keypair.fromPublicKey(publicKey);
     return true;
   } catch {
-    return false;
+    return /^G[A-Z2-7]{55}$/.test(publicKey);
   }
 };
 
