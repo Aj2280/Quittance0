@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
+import { Loader2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import PayPageHeader from '@/components/PayPageHeader';
 import PayAmountBlock from '@/components/PayAmountBlock';
@@ -27,13 +27,14 @@ import { PAYMENT_STATUS_POLL_INTERVAL_MS } from '@/lib/api';
 import { usePaymentPage } from '@/lib/use-payment-page';
 import { MAIN_CONTENT_ID, describeAmount, statusText } from '@/lib/a11y';
 import { useWalletStore } from '@/lib/store';
-import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
+import { EXPECTED_WALLET_NETWORK, NETWORK_DISPLAY_NAME } from '@/lib/stellar';
 import { detectDevice } from '@/lib/mobile-detection';
 
 export default function PaymentPage() {
   const id = useParams().id as string;
   const page = usePaymentPage(id);
   const walletSession = useWalletStore();
+  const isWrongNetwork = useWalletStore((s) => s.isWrongNetwork);
   const [isMobile, setIsMobile] = useState(false);
   const [showDesktopWalletAnyway, setShowDesktopWalletAnyway] = useState(false);
 
@@ -271,6 +272,21 @@ export default function PaymentPage() {
                           className="mb-4"
                         />
                       )}
+                      {walletPaymentGate.ready && isWrongNetwork && (
+                        <div
+                          role="alert"
+                          className="mb-4 p-4 bg-amber-50 border border-amber-300 rounded-xl flex items-center gap-3 text-sm text-amber-900"
+                        >
+                          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" aria-hidden="true" />
+                          <div>
+                            <p className="font-semibold">Wrong Stellar Network</p>
+                            <p className="mt-0.5 text-xs text-amber-800">
+                              Your wallet is connected to a different network. Please switch to {NETWORK_DISPLAY_NAME} in Freighter, then reconnect to pay.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      {!(isWrongNetwork && walletPaymentGate.ready) && (
                       <PaymentButton
                         destination={invoice.sellerPublicKey}
                         amount={String(invoice.amount)}
