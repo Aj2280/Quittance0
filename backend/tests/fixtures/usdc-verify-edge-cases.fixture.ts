@@ -92,7 +92,7 @@ export const USDC_VERIFY_CASES: UsdcTestCase[] = [
     name: 'real testnet USDC underpayment rejection',
     description: 'Rejects real on-chain transaction ffa8... when invoice demands 150 USDC but 100 USDC was paid',
     expectedResult: false,
-    expectedCode: 'AMOUNT_MISMATCH',
+    expectedCode: 'AMOUNT_TOO_LOW',
     input: {
       txHash: REAL_TESTNET_TX_USDC_100,
       network: 'TESTNET',
@@ -125,7 +125,7 @@ export const USDC_VERIFY_CASES: UsdcTestCase[] = [
     name: 'real testnet USDC overpayment rejection',
     description: 'Rejects real on-chain transaction ffa8... when invoice demands 50 USDC but 100 USDC was paid',
     expectedResult: false,
-    expectedCode: 'AMOUNT_MISMATCH',
+    expectedCode: 'AMOUNT_TOO_HIGH',
     input: {
       txHash: REAL_TESTNET_TX_USDC_100,
       network: 'TESTNET',
@@ -292,7 +292,7 @@ export const USDC_VERIFY_CASES: UsdcTestCase[] = [
     name: 'path payment strict send underpayment rejection',
     description: 'Rejects path_payment_strict_send when delivered dest_amount is less than expected',
     expectedResult: false,
-    expectedCode: 'AMOUNT_MISMATCH',
+    expectedCode: 'AMOUNT_TOO_LOW',
     input: {
       txHash: REAL_TESTNET_TX_USDC_20,
       network: 'TESTNET',

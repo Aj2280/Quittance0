@@ -252,7 +252,9 @@ export class PaymentMonitorService {
     if (!verification.ok) {
       await this.invoices.logPaymentEvent(
         invoice.id,
-        verification.code === 'AMOUNT_MISMATCH' ? 'PARTIAL_PAYMENT' : 'PAYMENT_REJECTED',
+        verification.code === 'AMOUNT_TOO_LOW' || verification.code === 'AMOUNT_MISMATCH'
+          ? 'PARTIAL_PAYMENT'
+          : 'PAYMENT_REJECTED',
         {
           code: verification.code,
           txHash: payment.txHash,

@@ -97,6 +97,8 @@ Rejections return a stable `code` alongside the human-readable `error`:
 | `MEMO_MISMATCH` | Memo mismatch | 400 |
 | `DESTINATION_MISMATCH` | Payment destination mismatch | 400 |
 | `AMOUNT_MISMATCH` | Amount mismatch | 400 |
+| `AMOUNT_TOO_LOW` | Payment is less than the invoice amount | 400 |
+| `AMOUNT_TOO_HIGH` | Payment is more than the invoice amount | 400 |
 | `ASSET_MISMATCH` | Asset mismatch | 400 |
 | `NETWORK_MISMATCH` | Transaction is on a different Stellar network | 400 |
 

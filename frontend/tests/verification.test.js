@@ -99,6 +99,8 @@ test('covers every rejection code with a message', () => {
     'MEMO_MISMATCH',
     'DESTINATION_MISMATCH',
     'AMOUNT_MISMATCH',
+    'AMOUNT_TOO_LOW',
+    'AMOUNT_TOO_HIGH',
     'ASSET_MISMATCH',
     'NETWORK_MISMATCH',
     'TX_HASH_ALREADY_USED',

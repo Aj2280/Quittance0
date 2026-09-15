@@ -170,7 +170,7 @@ describe('PaymentMonitorService durable cursor', () => {
     await monitor.runOnce();
     assert.equal(invoices.invoice.status, 'PENDING');
     assert.equal(invoices.events[0]?.type, 'PARTIAL_PAYMENT');
-    assert.equal(invoices.events[0]?.data.code, 'AMOUNT_MISMATCH');
+    assert.equal(invoices.events[0]?.data.code, 'AMOUNT_TOO_LOW');
     assert.equal(checkpoints.value?.cursor, '31');
   });
 

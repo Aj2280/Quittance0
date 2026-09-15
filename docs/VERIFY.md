@@ -20,8 +20,22 @@ Checks run in a fixed order so every caller reports the same *first* failure:
    (`NO_PAYMENT_OPERATION`)
 4. **Memo** — must equal the invoice memo (`MEMO_MISMATCH`)
 5. **Destination** — must be the seller's account (`DESTINATION_MISMATCH`)
-6. **Amount** — compared at Stellar's 7-decimal precision (`AMOUNT_MISMATCH`)
+6. **Amount** — compared at Stellar's 7-decimal precision with no tolerance:
+   less than the invoice is `AMOUNT_TOO_LOW`, more is `AMOUNT_TOO_HIGH`, and
+   `AMOUNT_MISMATCH` is reserved for an amount that cannot be compared at all
+   (`abc`, an empty string, a missing operation field)
 7. **Asset** — code *and* issuer (`ASSET_MISMATCH`)
+
+## Amount policy
+
+An invoice settles on the exact amount, not on at-least. A payment one stroop
+short is rejected as `AMOUNT_TOO_LOW` and the invoice stays `PENDING`: the
+money is not lost, but it does not settle the invoice either. A payment one
+stroop over is rejected as `AMOUNT_TOO_HIGH`: the funds still reach the
+seller, but the invoice does not transition on them, so a client that
+overpays cannot silently turn a 50 USDC invoice into a 100 USDC one. Both
+outcomes are recorded in the payment-event log for reconciliation
+(see [LATE_PAYMENT_POLICY.md](./LATE_PAYMENT_POLICY.md)).
 
 ## Asset matching
 
