@@ -1,6 +1,16 @@
-export const MIN_INVOICE_EXPIRY_DAYS = 1;
-export const MAX_INVOICE_EXPIRY_DAYS = 30;
-export const DEFAULT_INVOICE_EXPIRY_DAYS = 7;
+// The bounds live in the shared rule set so the API and the form cannot
+// disagree about how long an invoice may stay open.
+import {
+  DEFAULT_INVOICE_EXPIRY_DAYS,
+  MAX_INVOICE_EXPIRY_DAYS,
+  MIN_INVOICE_EXPIRY_DAYS,
+} from '../../../shared/invoice-validation';
+
+export {
+  DEFAULT_INVOICE_EXPIRY_DAYS,
+  MAX_INVOICE_EXPIRY_DAYS,
+  MIN_INVOICE_EXPIRY_DAYS,
+};
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 

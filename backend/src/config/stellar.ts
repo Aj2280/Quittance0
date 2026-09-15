@@ -4,7 +4,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // Network configuration
-export const SUPPORTED_STELLAR_NETWORKS = ['TESTNET', 'PUBLIC'] as const;
+import { SUPPORTED_STELLAR_NETWORKS } from '../../../shared/invoice-validation';
+
+export { SUPPORTED_STELLAR_NETWORKS };
 const configuredNetwork = (process.env.STELLAR_NETWORK || 'TESTNET').toUpperCase();
 if (!SUPPORTED_STELLAR_NETWORKS.includes(configuredNetwork as any)) {
   throw new Error('STELLAR_NETWORK must be TESTNET or PUBLIC');
