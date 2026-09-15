@@ -17,7 +17,7 @@ import { showFreighterInstallPrompt, showFreighterWrongNetworkPrompt } from '@/c
 import { describeVerifyError, normalizePayerDetails } from '@/lib/payment-page-state';
 import { resolveVerificationError } from '@/lib/verification';
 import { useWalletStore } from '@/lib/store';
-import { walletGate } from '@/lib/freighter-availability';
+import { walletSessionGate } from '@/lib/wallet-session';
 
 interface PaymentButtonProps {
   destination: string;
@@ -54,7 +54,9 @@ export default function PaymentButton({
 }: PaymentButtonProps) {
   const [loading, setLoading] = useState(false);
   const { publicKey, connected, network, freighterAvailable } = useWalletStore();
-  const gate = walletGate(
+  // Same session, same gate as the create form and the dashboard: a mismatch
+  // blocks all three from one place (issue #442).
+  const gate = walletSessionGate(
     { freighterAvailable, connected, publicKey, network },
     EXPECTED_WALLET_NETWORK
   );
