@@ -46,7 +46,7 @@ jobs:
         run: npm test
 
   frontend:
-    name: Frontend — lint, typecheck and tests
+    name: Frontend — lint, typecheck, unit, and a11y tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -77,8 +77,11 @@ jobs:
       - name: Test
         run: npm test
 
-  root-tests:
-    name: Shared export tests
+      - name: Accessibility audit
+        run: npm run test:a11y
+
+  shared-contracts:
+    name: Shared — contract and asset subsystem tests
     runs-on: ubuntu-latest
 
     steps:
@@ -86,7 +89,42 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Test
+      - name: Install frontend dependencies (for export and asset runtime)
+        run: cd frontend && npm ci
+
+      - name: Run shared contract tests
         run: node --test tests/*.test.mjs
+
+  evidence-smoke:
+    name: Testnet evidence smoke (secrets gated)
+    runs-on: ubuntu-latest
+    if: ${{ secrets.EVIDENCE_PAYER_SECRET != '' && secrets.EVIDENCE_SELLER_PUBLIC_KEY != '' }}
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      EVIDENCE_API_URL: ${{ secrets.EVIDENCE_API_URL || 'https://api.quittance.example.com' }}
+      EVIDENCE_SELLER_PUBLIC_KEY: ${{ secrets.EVIDENCE_SELLER_PUBLIC_KEY }}
+      EVIDENCE_PAYER_SECRET: ${{ secrets.EVIDENCE_PAYER_SECRET }}
+      EVIDENCE_FRONTEND_URL: ${{ secrets.EVIDENCE_FRONTEND_URL }}
+      STELLAR_NETWORK: TESTNET
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Testnet smoke
+        run: npm run evidence:smoke

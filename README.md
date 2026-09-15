@@ -429,23 +429,26 @@ fallback UX without Google login, and demonstration instructions are in
 
 ## Tests & CI
 
-Every pull request and every push to `main` runs the same three jobs defined in
-[`.github/workflows/ci.yml`](./.github/workflows/ci.yml). All of them are
-reproducible locally with the commands below — CI runs nothing you cannot run
-yourself.
+Every pull request and every push to `main` runs the jobs defined in
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
+1. **`backend`**: Backend typecheck and unit/integration tests with loopback Horizon stub.
+2. **`frontend`**: Frontend lint, typecheck, unit tests, and accessibility (`axe-core`) audit.
+3. **`shared-contracts`**: Root shared contracts and asset subsystem tests.
+4. **`evidence-smoke`**: Optional Testnet end-to-end smoke test (gated by repository secrets).
+
+All checks run hermetically without secrets on public PRs and are reproducible locally:
 
 ```bash
-# Backend: typecheck + unit and integration tests
-cd backend && npm ci && npm run typecheck && npm test
+# Run the complete test and typecheck suite from repository root
+npm run ci
 
-# Frontend: lint + typecheck + unit tests
-cd frontend && npm ci && npm run lint && npm run typecheck && npm test
-
-# Frontend: focused axe, focus-management, live-region, and contrast checks
-cd frontend && npm run test:a11y
-
-# Shared export helpers (repository root)
-node --test "tests/**/*.test.mjs"
+# Or run individual verification stages:
+npm run typecheck      # Typecheck backend and frontend
+npm run test:shared    # Run shared contracts and asset subsystem tests
+npm run test:backend   # Run backend tests
+npm run test:frontend  # Run frontend tests
+npm run test:a11y      # Run focused accessibility audit (axe + contrast + live regions)
+npm run lint:frontend  # Run Next.js ESLint
 ```
 
 The focused accessibility suite renders the landing, dashboard, pay, and
