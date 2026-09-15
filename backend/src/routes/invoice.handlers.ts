@@ -37,6 +37,11 @@ export interface TransactionLookup {
   getTransaction(txHash: string): Promise<any>;
 }
 
+export interface PaymentMonitorWatchRegistry {
+  registerWatch(invoice: any): void;
+  unregisterWatch(invoiceId: string): void;
+}
+
 export interface InvoiceHandlerOptions {
   storage: InvoiceStorage;
   /** Defaults to FRONTEND_URL, read per request so tests and dev reloads see changes. */
@@ -45,6 +50,7 @@ export interface InvoiceHandlerOptions {
   allowSimulate?: boolean;
   stellar?: TransactionLookup;
   requireCancelSignature?: boolean;
+  paymentMonitor?: PaymentMonitorWatchRegistry;
 }
 
 export interface InvoiceHandlers {
@@ -134,6 +140,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           return sendFailure(res, 400, 'Client wallet network does not match the server Stellar network');
         }
         const invoice = await storage.createInvoice(validatedData);
+        options.paymentMonitor?.registerWatch(invoice);
         const payment = await buildPaymentPayload(invoice);
 
         sendSuccess(res, 201, {
@@ -333,6 +340,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         }
 
         const invoice = await storage.cancelInvoice(req.params.id, sellerPublicKey);
+        options.paymentMonitor?.unregisterWatch(req.params.id);
         sendSuccess(res, 200, invoice);
       } catch (error: any) {
         logError('Cancel invoice error:', error);
@@ -420,6 +428,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
             payerCheck.value,
             { settledAt: verification.value.settledAt }
           );
+          options.paymentMonitor?.unregisterWatch(id);
           
           // Cache successful verification
           await cacheVerificationResult(id, hashCheck.value, 'verified');
@@ -519,6 +528,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         const mockPayerKey = 'GXXXSIMULATEDPAYERXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
 
         const updatedInvoice = await storage.markAsPaid(id, mockTxHash, mockPayerKey);
+        options.paymentMonitor?.unregisterWatch(id);
 
         sendSuccess(res, 200, updatedInvoice, { message: 'Payment simulated successfully' });
       } catch (error: any) {
