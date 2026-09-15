@@ -32,7 +32,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # The backend suite drives Node own test runner (node --import tsx
+          # --test). On 20 that runner intermittently fails inside its own IPC
+          # layer with Unable to deserialize cloned data (raised in
+          # #processRawBuffer / FileTest.parseMessage) on the same test file that
+          # passes alone, while every assertion in the suite passes. Reproduced
+          # locally: 5/5 full-suite runs fail on 20, 4/4 pass on 22 and 24 with
+          # the suite unchanged. 24 is the runtime the other two jobs already use,
+          # and no test, script or assertion is changed by this.
+          node-version: 24
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
