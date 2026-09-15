@@ -92,6 +92,12 @@ export function dashboardDataFor(
   now?: string | number | Date
 ): DashboardData;
 
+export function applyInvoiceCancellation(
+  loaded: OwnedDashboardData | null | undefined,
+  owner: string | null | undefined,
+  cancelledId: string
+): OwnedDashboardData;
+
 export function reconcileExpiryStats(
   stats: DashboardStats | null | undefined,
   originalInvoices: DashboardInvoice[],

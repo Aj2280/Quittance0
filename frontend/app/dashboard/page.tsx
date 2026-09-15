@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { downloadInvoiceCSV } from '@/lib/export';
 import {
   dashboardDataFor,
+  applyInvoiceCancellation,
   exportableInvoices,
   hasAnyInvoices as hasAnyInvoicesIn,
   revenueEntries,
@@ -115,22 +116,9 @@ export default function DashboardPage() {
   }, [filter, gate.ready, publicKey, reloadKey]);
 
   const handleInvoiceCancelled = (cancelledId: string) => {
-    setLoaded((prev) => {
-      if (!prev.invoices) return prev;
-      const updatedInvoices = prev.invoices.map((inv) =>
-        inv.id === cancelledId ? { ...inv, status: 'CANCELLED' } : inv
-      );
-      return {
-        ...prev,
-        invoices: updatedInvoices,
-        stats: prev.stats
-          ? {
-              ...prev.stats,
-              pending_invoices: Math.max(0, Number(prev.stats.pending_invoices || 0) - 1),
-            }
-          : prev.stats,
-      };
-    });
+    // The wallet the user acted in, not whichever one is connected when the
+    // request resolves. applyInvoiceCancellation refuses the update otherwise.
+    setLoaded((prev) => applyInvoiceCancellation(prev, publicKey, cancelledId));
     setReloadKey((k) => k + 1);
   };
 

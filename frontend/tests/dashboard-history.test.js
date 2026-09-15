@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const {
   belongsToSeller,
   dashboardDataFor,
+  applyInvoiceCancellation,
   actionableInvoices,
   emptyDashboardData,
   exportableInvoices,
@@ -254,4 +255,36 @@ test('cancelled invoices are retained in historical invoices', () => {
 
   assert.deepEqual(actionableInvoices(invoices, now).map((i) => i.id), ['live']);
   assert.deepEqual(historicalInvoices(invoices, now).map((i) => i.id), ['cancelled']);
+});
+
+const loadedFor = (owner, invoices) => ({
+  owner,
+  invoices,
+  stats: { total_invoices: invoices.length, pending_invoices: invoices.length },
+});
+
+test('applyInvoiceCancellation cancels the row and drops the pending count for its owner', () => {
+  const state = loadedFor(ALICE, [invoice({ id: 'inv-1' }), invoice({ id: 'inv-2', memo: 'QTN-2' })]);
+
+  const next = applyInvoiceCancellation(state, ALICE, 'inv-1');
+
+  assert.equal(next.invoices.find((row) => row.id === 'inv-1').status, 'CANCELLED');
+  assert.equal(next.invoices.find((row) => row.id === 'inv-2').status, 'PENDING');
+  assert.equal(next.stats.pending_invoices, 1);
+});
+
+test('applyInvoiceCancellation refuses a cancellation that resolved for a previous wallet', () => {
+  const state = loadedFor(BOB, [invoice({ id: 'inv-9', sellerPublicKey: BOB })]);
+
+  const next = applyInvoiceCancellation(state, ALICE, 'inv-1');
+
+  assert.equal(next, state, 'the state object itself must be untouched');
+  assert.equal(next.stats.pending_invoices, 1);
+  assert.equal(next.invoices[0].status, 'PENDING');
+});
+
+test('applyInvoiceCancellation ignores an id that is not in the loaded rows', () => {
+  const state = loadedFor(ALICE, [invoice({ id: 'inv-1' })]);
+
+  assert.equal(applyInvoiceCancellation(state, ALICE, 'inv-unknown'), state);
 });
