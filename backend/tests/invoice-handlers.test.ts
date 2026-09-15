@@ -533,8 +533,8 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       );
 
       assert.equal(res.statusCode, 400);
-      assert.equal(res.body.code, 'AMOUNT_MISMATCH');
-      assert.equal(res.body.error, 'Amount mismatch');
+      assert.equal(res.body.code, 'AMOUNT_TOO_LOW');
+      assert.equal(res.body.error, 'Payment is less than the invoice amount');
     });
 
     it('refuses to verify an invoice twice', async () => {

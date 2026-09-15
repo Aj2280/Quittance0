@@ -6,9 +6,20 @@
 // both adapters with the same assertions to guarantee field parity.
 import { Request, Response } from 'express';
 import stellarService from '../services/stellar.service';
-import { cancelInvoiceSchema, createInvoiceSchema, stellarPublicKeySchema } from '../utils/validation';
+import {
+  cancelInvoiceSchema,
+  createInvoiceFieldErrors,
+  createInvoiceSchema,
+  stellarPublicKeySchema,
+} from '../utils/validation';
+import { firstCreateInvoiceMessage } from '../../../shared/invoice-validation';
 import { generatePaymentQR, generateStellarPaymentQR } from '../utils/qrcode';
-import { sendFailure, sendSuccess, sendVerificationFailure } from '../types/api';
+import {
+  sendFailure,
+  sendSuccess,
+  sendValidationFailure,
+  sendVerificationFailure,
+} from '../types/api';
 import type { InvoiceStorage, StoredInvoice } from '../storage/invoice-storage';
 import { STELLAR_NETWORK } from '../config/stellar';
 import {
@@ -130,7 +141,16 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
       }
       const requestId = createRequestId();
       try {
-        const validatedData = createInvoiceSchema.parse(req.body);
+        const parsed = createInvoiceSchema.safeParse(req.body);
+        if (!parsed.success) {
+          const fieldErrors = createInvoiceFieldErrors(parsed.error);
+          return sendValidationFailure(
+            res,
+            firstCreateInvoiceMessage(fieldErrors) || 'Invalid invoice payload',
+            fieldErrors
+          );
+        }
+        const validatedData = parsed.data;
         if (validatedData.network && validatedData.network !== STELLAR_NETWORK) {
           return sendFailure(res, 400, 'Client wallet network does not match the server Stellar network');
         }

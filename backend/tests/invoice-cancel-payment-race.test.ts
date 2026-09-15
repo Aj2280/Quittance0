@@ -342,7 +342,7 @@ function runManualVerifySuite(name: string, createStorage: () => InvoiceStorage)
       );
 
       assert.equal(verified.statusCode, 400, JSON.stringify(verified.body));
-      assert.equal(verified.body.code, 'AMOUNT_MISMATCH');
+      assert.equal(verified.body.code, 'AMOUNT_TOO_LOW');
 
       const stored = await storage.getInvoiceById(invoice.id);
       assert.equal(stored?.status, 'CANCELLED');
@@ -484,7 +484,7 @@ describe('cancel versus payment monitor attribution on memory storage', () => {
     const events = await invoiceService.getPaymentEvents(invoice.id);
     assert.equal(events.length, 1);
     assert.equal(events[0].eventType, 'PARTIAL_PAYMENT');
-    assert.equal(events[0].eventData.code, 'AMOUNT_MISMATCH');
+    assert.equal(events[0].eventData.code, 'AMOUNT_TOO_LOW');
   });
 });
 

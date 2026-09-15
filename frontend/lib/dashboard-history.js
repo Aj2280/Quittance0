@@ -143,6 +143,41 @@ function dashboardDataFor(data, sellerPublicKey, now) {
 }
 
 /** Sorted revenue pairs. Revenue is never summed across assets. */
+/**
+ * Apply a cancellation to the loaded dashboard state.
+ *
+ * Loaded rows carry the wallet they came from. A cancellation that resolves
+ * after a wallet switch would otherwise decrement the next seller's pending
+ * count, which is the cross-wallet count leak this module exists to prevent,
+ * so the update is refused unless the loaded rows belong to the wallet that
+ * issued it. An id that is not in those rows is a no-op too: a stray callback
+ * must not move a count that never matched it.
+ */
+function applyInvoiceCancellation(loaded, owner, cancelledId) {
+  if (!loaded || !owner || loaded.owner !== owner) return loaded;
+
+  const invoices = Array.isArray(loaded.invoices) ? loaded.invoices : [];
+  if (!invoices.some((invoice) => invoice && invoice.id === cancelledId)) {
+    return loaded;
+  }
+
+  return {
+    ...loaded,
+    invoices: invoices.map((invoice) =>
+      invoice.id === cancelledId ? { ...invoice, status: 'CANCELLED' } : invoice
+    ),
+    stats: loaded.stats
+      ? {
+          ...loaded.stats,
+          pending_invoices: Math.max(
+            0,
+            Number(loaded.stats.pending_invoices || 0) - 1
+          ),
+        }
+      : loaded.stats,
+  };
+}
+
 function revenueEntries(stats) {
   const revenue = stats?.revenue_by_asset;
   if (!revenue || typeof revenue !== 'object') return [];
@@ -231,6 +266,7 @@ module.exports = {
   isInvoiceCancellable,
   emptyDashboardData,
   dashboardDataFor,
+  applyInvoiceCancellation,
   reconcileExpiryStats,
   revenueEntries,
   hasAnyInvoices,

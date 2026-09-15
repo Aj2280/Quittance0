@@ -84,24 +84,36 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
       return;
     }
 
-    // One parser for the whole create path: it rejects what the API would
-    // reject (zero, negative, more than 7 decimals, out of range) instead of
-    // sending an amount the server has to turn down later.
-    const parsedAmount = parseAmountInput(amount);
-    if (parsedAmount === null) {
-      toast.error('Enter a valid amount');
+    // One parser and one rule set for the whole create path, asked before the
+    // request so the message under an input is the sentence the server would
+    // have answered with - the two local regexes and the toast-only checks are
+    // gone. When the parser refuses, the raw text goes along: an empty box and
+    // letters in the box are different mistakes.
+    const parsedValue = parseAmountInput(amount);
+    const parsedAmount = parsedValue as number;
+
+    const preflight = formFieldErrors({
+      sellerPublicKey: sellerWallet,
+      amount:
+        parsedValue === null && amount.trim() !== '' ? amount.trim() : parsedValue ?? undefined,
+      assetCode,
+      assetIssuer: getAssetByCode(assetCode)?.issuer,
+      description: description || undefined,
+      customerName: customerName.trim() || undefined,
+      customerEmail: customerEmail.trim() || undefined,
+      sellerName: sellerName.trim() || undefined,
+      sellerEmail: sellerEmail.trim() || undefined,
+      expiresInDays,
+      network: EXPECTED_WALLET_NETWORK,
+    });
+
+    if (Object.keys(preflight).length > 0) {
+      setFieldErrors(preflight);
+      focusField(firstInvalidFieldId(preflight));
       return;
     }
 
-    if (customerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) {
-      toast.error('Enter a valid client email');
-      return;
-    }
-
-    if (sellerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sellerEmail)) {
-      toast.error('Enter a valid email for yourself');
-      return;
-    }
+    setFieldErrors({});
 
     setLoading(true);
     setApiError(null);
@@ -135,6 +147,16 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
       // The invoice exists now, so the draft has served its purpose.
       clearInvoiceDraft();
     } catch (error: any) {
+      // A refusal that names fields belongs under those fields; anything else
+      // (an unreachable API, a 500) keeps the banner-and-toast path.
+      const serverFieldErrors = fieldErrorsFromApiError(error);
+      if (Object.keys(serverFieldErrors).length > 0) {
+        setFieldErrors(serverFieldErrors);
+        focusField(firstInvalidFieldId(serverFieldErrors));
+        toast.error(fieldErrorSummary(serverFieldErrors) || 'Could not create the invoice');
+        return;
+      }
+
       const message = apiErrorMessage(error, 'Failed to create invoice');
       if (isApiUnavailableError(error)) setApiError(message);
       toast.error(message);
@@ -187,7 +209,12 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
             min="0.0000001"
             required
             aria-required="true"
-            aria-describedby="invoice-amount-hint"
+            aria-invalid={fieldErrors.amount ? true : undefined}
+            aria-describedby={
+              fieldErrors.amount
+                ? 'invoice-amount-hint invoice-amount-error'
+                : 'invoice-amount-hint'
+            }
             className="input flex-1 text-2xl font-semibold"
             placeholder="10.00"
             value={amount}
@@ -225,6 +252,11 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
             ? 'The amount your client pays in USDC (requires a USDC trustline on Stellar).'
             : 'The amount your client pays, in the selected asset.'}
         </p>
+        {fieldErrors.amount && (
+          <p id="invoice-amount-error" className="field-hint text-red-600" role="alert">
+            {fieldErrors.amount}
+          </p>
+        )}
       </div>
 
       <div>
@@ -293,7 +325,14 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
             value={sellerEmail}
             onChange={(e) => setSellerEmail(e.target.value)}
             maxLength={255}
+            aria-invalid={fieldErrors.sellerEmail ? true : undefined}
+            aria-describedby={fieldErrors.sellerEmail ? 'seller-email-error' : undefined}
           />
+          {fieldErrors.sellerEmail && (
+            <p id="seller-email-error" className="field-hint text-red-600" role="alert">
+              {fieldErrors.sellerEmail}
+            </p>
+          )}
         </div>
       </div>
 
@@ -321,7 +360,12 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
           id="customer-email"
           name="customerEmail"
           type="email"
-          aria-describedby="customer-email-hint"
+          aria-invalid={fieldErrors.customerEmail ? true : undefined}
+          aria-describedby={
+            fieldErrors.customerEmail
+              ? 'customer-email-hint customer-email-error'
+              : 'customer-email-hint'
+          }
           className="input text-sm"
           placeholder="client@example.com"
           value={customerEmail}
@@ -331,6 +375,11 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
         <p id="customer-email-hint" className="field-hint">
           Used only to send the invoice or payment proof. Not required to create an invoice.
         </p>
+        {fieldErrors.customerEmail && (
+          <p id="customer-email-error" className="field-hint text-red-600" role="alert">
+            {fieldErrors.customerEmail}
+          </p>
+        )}
       </div>
 
       <button

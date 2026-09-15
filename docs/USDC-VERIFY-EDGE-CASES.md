@@ -131,7 +131,7 @@ The canonical check pipeline executes in fixed order:
 3. Payment operation presence (`NO_PAYMENT_OPERATION`)
 4. Memo match (`MEMO_MISMATCH`)
 5. Destination match (`DESTINATION_MISMATCH`)
-6. Amount match (`AMOUNT_MISMATCH`)
+6. Amount match (`AMOUNT_TOO_LOW` / `AMOUNT_TOO_HIGH`, `AMOUNT_MISMATCH` when unparseable)
 7. Asset identity match (`ASSET_MISMATCH`)
 
 | Scenario | Horizon Operation Shape | Invoice Expectation | Verify Outcome | Code | Rationale |
@@ -140,10 +140,10 @@ The canonical check pipeline executes in fixed order:
 | Path Payment Strict Receive | `path_payment_strict_receive` (dest: 20 USDC) | 20.0000000 USDC, Circle issuer | Accepted | - | Delivered amount and asset match |
 | Path Payment Strict Send | `path_payment_strict_send` (dest: 25 USDC) | 25.0000000 USDC, Circle issuer | Accepted | - | Delivered dest_amount matches |
 | Rogue / Fake Issuer USDC | `payment` (20 USDC, Rogue issuer) | 20.0000000 USDC, Circle issuer | Rejected | `ASSET_MISMATCH` | Issuer does not match Circle testnet key |
-| Underpayment | `payment` (20.0000000 USDC) | 25.0000000 USDC | Rejected | `AMOUNT_MISMATCH` | Delivered amount is less than expected |
-| Overpayment | `payment` (100.0000000 USDC) | 50.0000000 USDC | Rejected | `AMOUNT_MISMATCH` | Overpayment policy rejects excess funds |
+| Underpayment | `payment` (20.0000000 USDC) | 25.0000000 USDC | Rejected | `AMOUNT_TOO_LOW` | Delivered amount is less than expected |
+| Overpayment | `payment` (100.0000000 USDC) | 50.0000000 USDC | Rejected | `AMOUNT_TOO_HIGH` | Exact-amount contract rejects excess funds instead of settling |
 | Sub-Stroop Dust (< 0.5 stroop) | `payment` (10.00000004 USDC) | 10.0000000 USDC | Accepted | - | 8th decimal < 5 rounds to zero delta |
-| Sub-Stroop Dust (>= 0.5 stroop) | `payment` (10.00000005 USDC) | 10.0000000 USDC | Rejected | `AMOUNT_MISMATCH` | 8th decimal >= 5 rounds to 1 stroop delta |
+| Sub-Stroop Dust (>= 0.5 stroop) | `payment` (10.00000005 USDC) | 10.0000000 USDC | Rejected | `AMOUNT_TOO_HIGH` | 8th decimal >= 5 rounds to a 1 stroop excess |
 | Wrong Destination | `payment` (to: other account) | to: seller account | Rejected | `DESTINATION_MISMATCH` | Funds delivered to incorrect wallet |
 | Memo Mismatch | `payment` (memo: 'WRONG') | memo: 'EXPECTED' | Rejected | `MEMO_MISMATCH` | Evaluated before destination and amount |
 | Network Mismatch | `payment` observed on TESTNET | invoice network PUBLIC | Rejected | `NETWORK_MISMATCH` | Evaluated before payment operations |

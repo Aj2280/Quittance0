@@ -155,18 +155,18 @@ describe('verifyHorizonPayment — rejections', () => {
     assert.equal(codeOf(result), 'DESTINATION_MISMATCH');
   });
 
-  it('rejects a partial payment', () => {
+  it('rejects a partial payment as a shortfall, not a generic mismatch', () => {
     const result = verifyHorizonPayment(
       input({ operations: [paymentOp({ amount: '99.9999999' })] })
     );
 
-    assert.equal(codeOf(result), 'AMOUNT_MISMATCH');
+    assert.equal(codeOf(result), 'AMOUNT_TOO_LOW');
   });
 
-  it('rejects an overpayment and an unparseable amount', () => {
+  it('rejects an overpayment with its own code and an unparseable amount generically', () => {
     assert.equal(
       codeOf(verifyHorizonPayment(input({ operations: [paymentOp({ amount: '150' })] }))),
-      'AMOUNT_MISMATCH'
+      'AMOUNT_TOO_HIGH'
     );
     assert.equal(
       codeOf(verifyHorizonPayment(input({ operations: [paymentOp({ amount: 'abc' })] }))),
@@ -334,7 +334,7 @@ describe('verifyHorizonPayment — check ordering', () => {
         }),
       ],
     };
-    assert.equal(codeOf(verifyHorizonPayment(destinationFixed)), 'AMOUNT_MISMATCH');
+    assert.equal(codeOf(verifyHorizonPayment(destinationFixed)), 'AMOUNT_TOO_LOW');
 
     const amountFixed = {
       ...memoFixed,
