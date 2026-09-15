@@ -1,22 +1,22 @@
 import * as StellarSdk from '@stellar/stellar-sdk';
-import * as FreighterApi from '@stellar/freighter-api';
-import {
-  isConnected,
-  getPublicKey,
-  signTransaction,
-  isAllowed,
-  setAllowed,
-  getNetwork,
-  getNetworkDetails,
-} from '@stellar/freighter-api';
+import * as FreighterApiModule from '@stellar/freighter-api';
+
+const freighter: any = (FreighterApiModule as any).default || FreighterApiModule;
+const isConnected = freighter.isConnected;
+const getPublicKey = freighter.getPublicKey;
+const signTransaction = freighter.signTransaction;
+const isAllowed = freighter.isAllowed;
+const setAllowed = freighter.setAllowed;
+const getNetwork = freighter.getNetwork;
+const getNetworkDetails = freighter.getNetworkDetails;
 import {
   FREIGHTER_CONNECT_REQUIRED_MESSAGE,
   FREIGHTER_REQUIRED_MESSAGE,
   detectFreighter,
   networkMatches,
   wrongNetworkMessage,
-} from './freighter-availability';
-import { networkDisplayName } from './network-display-name';
+} from './freighter-availability.js';
+import { networkDisplayName } from './network-display-name.js';
 
 // Network configuration
 export const STELLAR_NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'TESTNET';
