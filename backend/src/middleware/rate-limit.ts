@@ -308,3 +308,18 @@ export function resetRateLimiters(): void {
   defaultLimiterStore.reset();
   inFlightVerifications.clear();
 }
+
+
+/**
+ * Compatibility rate limit middleware factory for legacy caller patterns.
+ */
+export function rateLimitMiddleware(limitKey: string): RequestHandler {
+  return createRateLimiter({
+    windowMs: 60_000,
+    max: 60,
+    keyGenerator: (req) => `${limitKey}:${getClientIp(req)}`,
+    code: 'RATE_LIMIT_EXCEEDED',
+    message: 'Rate limit exceeded',
+  });
+}
+
