@@ -139,7 +139,7 @@ export const getUserPublicKey = async (): Promise<string | null> => {
     const normalized = readResultString(publicKey, ['publicKey', 'address']);
     if (normalized) return normalized;
 
-    const getAddress = (FreighterApi as any).getAddress;
+    const getAddress = (freighter as any).getAddress;
     if (typeof getAddress === 'function') {
       return readResultString(await getAddress(), ['address', 'publicKey']);
     }
@@ -163,7 +163,7 @@ export const readFreighterSession = async (): Promise<FreighterSession> => {
   }
 
   const [allowed, publicKey, network] = await Promise.all([
-    isAllowed().then((value) => readResultBoolean(value, 'isAllowed')).catch(() => false),
+    isAllowed().then((value: any) => readResultBoolean(value, 'isAllowed')).catch(() => false),
     getUserPublicKey(),
     getFreighterNetwork(),
   ]);
@@ -181,7 +181,7 @@ export const stopFreighterWalletWatcher = (
   onChange: (session: FreighterSession) => void,
   intervalMs = 1000
 ): (() => void) => {
-  const WatchWalletChanges = (FreighterApi as any).WatchWalletChanges;
+  const WatchWalletChanges = (freighter as any).WatchWalletChanges;
   if (typeof WatchWalletChanges !== 'function') return () => {};
 
   const watcher = new WatchWalletChanges(intervalMs);
