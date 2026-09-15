@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-// `apiErrorMessage` resolves stable verification codes to their canonical
-// message, so the invoice error banner never shows divergent copy.
 import { apiErrorMessage, invoiceApi, isApiUnavailableError } from '@/lib/api';
 import QRCodeDisplay from '@/components/QRCodeDisplay';
 import PaymentStatus from '@/components/PaymentStatus';
@@ -13,31 +11,34 @@ import UserProfile from '@/components/UserProfile';
 import FreighterInstallPrompt from '@/components/FreighterInstallPrompt';
 import PaymentReceipt from '@/components/PaymentReceipt';
 import AssetLogo from '@/components/AssetLogo';
-import { formatAmount, formatDate, getTimeRemaining } from '@/lib/utils';
+import InvoiceTimeline from '@/components/InvoiceTimeline';
+import InvoiceWorkspaceActions from '@/components/InvoiceWorkspaceActions';
+import { formatAmount, formatDate, getTimeRemaining, shortenAddress } from '@/lib/utils';
 import { MAIN_CONTENT_ID, describeAmount, statusText } from '@/lib/a11y';
-import { ArrowLeft, Share2, Loader2, X, Mail } from 'lucide-react';
+import { ArrowLeft, Loader2, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { useWalletStore } from '@/lib/store';
 import ApiErrorState from '@/components/ApiErrorState';
 import { effectiveInvoiceStatus } from '@/lib/invoice-lifecycle';
-import { invoiceSharePath } from '@/lib/invoice-share-path';
-import { shareInvoiceByEmail } from '@/lib/export';
 import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
 import { walletGate } from '@/lib/freighter-availability';
+import {
+  canAccessInvoiceWorkspace,
+  workspaceActionVisibility,
+  buildInvoiceTimeline,
+} from '@/lib/invoice-workspace';
 
 export default function InvoiceDetailPage() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
   const { publicKey, connected, network, freighterAvailable } = useWalletStore();
-  const storePublicKey = publicKey;
   const [invoice, setInvoice] = useState<any>(null);
   const [paymentInfo, setPaymentInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lifecycleNow, setLifecycleNow] = useState(() => Date.now());
-  // Cancelling reloads the invoice and swaps the status panel out from under
-  // the button that was just pressed, so focus has to be moved deliberately.
   const statusPanelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -74,49 +75,26 @@ export default function InvoiceDetailPage() {
     void loadInvoice();
   }, [loadInvoice]);
 
-  const handleShare = async () => {
-    const url = `${window.location.origin}${invoiceSharePath(invoice.id)}`;
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: 'Quittance Invoice',
-          text: `Pay ${invoice.amount} ${invoice.assetCode}`,
-          url,
-        });
-      } catch {
-        // User cancelled share
-      }
-    } else {
-      await navigator.clipboard.writeText(url);
-      toast.success('Invoice link copied');
-    }
-  };
-
   const gate = walletGate(
     { freighterAvailable, connected, publicKey, network },
     EXPECTED_WALLET_NETWORK
   );
-  const userWallet = gate.ready ? publicKey : null;
-  const activeWallet = userWallet || (connected ? storePublicKey : null);
+  const activeWallet = gate.ready ? publicKey : null;
 
   const handleCancel = async () => {
     if (!window.confirm('Cancel this invoice?')) return;
+    setCancelling(true);
     try {
       await invoiceApi.cancel(id, activeWallet || invoice?.sellerPublicKey);
       toast.success('Invoice cancelled');
       await loadInvoice();
-      /*
-       * Cancelling unmounts the Cancel button that was just pressed, which
-       * drops focus to the top of the document with no explanation. Focus goes
-       * to the status panel instead, which is also a live region and so states
-       * the new status (issue #289).
-       */
       statusPanelRef.current?.focus();
     } catch (error) {
       const message = apiErrorMessage(error, 'Failed to cancel invoice');
       if (isApiUnavailableError(error)) setLoadError(message);
       toast.error(message);
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -130,7 +108,6 @@ export default function InvoiceDetailPage() {
         <div className="orb orb-1"></div>
         <div className="orb orb-2"></div>
         <div className="orb orb-3"></div>
-        {/* The spinner has no text equivalent on its own. */}
         <div className="relative" role="status" aria-live="polite">
           <div className="absolute inset-0 bg-gradient-to-r from-cyan-400 to-blue-500 rounded-full blur-2xl opacity-30"></div>
           <Loader2 className="w-16 h-16 animate-spin text-teal-800 relative z-10" aria-hidden="true" />
@@ -169,8 +146,58 @@ export default function InvoiceDetailPage() {
     );
   }
 
+  // Seller workspace authorization checks
+  const access = canAccessInvoiceWorkspace(invoice, activeWallet);
+
+  if (!activeWallet) {
+    return (
+      <div className="min-h-screen bg-logo-pattern flex items-center justify-center px-4">
+        <div className="card text-center max-w-md w-full relative z-10 p-8 shadow-xl">
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Seller Authentication Required</h1>
+          <p className="text-gray-600 mb-6">
+            Connect your seller wallet to view, manage, and track this invoice workspace.
+          </p>
+          <div className="flex flex-col gap-3 items-center">
+            <WalletConnect />
+            <Link href={`/pay/${invoice.id}`} className="text-sm text-teal-700 hover:text-teal-900 underline mt-2">
+              Looking to pay this invoice instead? Open Pay Page
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!access.allowed && access.reason === 'FORBIDDEN') {
+    return (
+      <div className="min-h-screen bg-logo-pattern flex items-center justify-center px-4">
+        <div className="card text-center max-w-lg w-full relative z-10 p-8 shadow-xl" role="alert">
+          <div className="w-14 h-14 rounded-full bg-red-100 text-red-700 flex items-center justify-center mx-auto mb-4">
+            <ShieldAlert className="w-7 h-7" aria-hidden="true" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Access Restricted</h1>
+          <p className="text-gray-600 mb-6">
+            This invoice workspace belongs to another seller wallet (
+            <span className="font-mono text-xs font-semibold">
+              {shortenAddress(access.expectedSeller || invoice.sellerPublicKey)}
+            </span>
+            ). Other sellers cannot view or manage foreign invoices.
+          </p>
+          <div className="flex flex-wrap justify-center gap-3">
+            <WalletConnect />
+            <Link href="/dashboard" className="btn btn-outline">
+              Back to Dashboard
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const effectiveStatus = (effectiveInvoiceStatus(invoice, lifecycleNow) || invoice.status) as
     'PENDING' | 'PAID' | 'EXPIRED' | 'CANCELLED';
+  const actions = workspaceActionVisibility(invoice, lifecycleNow);
+  const timelineItems = buildInvoiceTimeline(invoice, network || 'testnet', lifecycleNow);
 
   return (
     <div className="min-h-screen bg-logo-pattern relative py-8 sm:py-12 px-4">
@@ -178,14 +205,9 @@ export default function InvoiceDetailPage() {
       <div className="orb orb-2"></div>
       <div className="orb orb-3"></div>
 
-      {/* Top-level banner landmark, not nested inside the content wrapper. */}
       <header className="fixed top-0 left-0 right-0 z-50 premium-header border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/*
-              Labels here are hidden below `sm`, so each control carries an
-              explicit accessible name that does not depend on the breakpoint.
-            */}
             <button
               onClick={() => router.back()}
               className="btn btn-outline flex items-center gap-2"
@@ -199,56 +221,34 @@ export default function InvoiceDetailPage() {
             </Link>
           </div>
 
-          <nav className="flex items-center gap-3" aria-label="Invoice actions">
-            {!publicKey ? (
-              <WalletConnect />
-            ) : (
-              <UserProfile userWallet={publicKey} />
-            )}
-            {effectiveStatus === 'PENDING' && (
-              <div className="flex items-center gap-2">
-                {invoice.customerEmail && (
-                  <button
-                    onClick={() => {
-                      shareInvoiceByEmail(invoice);
-                      toast.success('Opening email client');
-                    }}
-                    className="btn btn-outline flex items-center gap-2"
-                    aria-label={`Email invoice to ${invoice.customerEmail}`}
-                  >
-                    <Mail className="w-5 h-5" aria-hidden="true" />
-                    <span className="hidden sm:inline">Email</span>
-                  </button>
-                )}
-                <button
-                  onClick={handleShare}
-                  className="btn btn-primary flex items-center gap-2"
-                  aria-label="Share this invoice"
-                >
-                  <Share2 className="w-5 h-5" aria-hidden="true" />
-                  <span className="hidden sm:inline">Share</span>
-                </button>
-                {activeWallet && invoice.sellerPublicKey === activeWallet && (
-                  <button
-                    onClick={handleCancel}
-                    className="btn btn-destructive flex items-center gap-2"
-                    aria-label="Cancel this invoice"
-                  >
-                    <X className="w-5 h-5" aria-hidden="true" />
-                    <span className="hidden sm:inline">Cancel</span>
-                  </button>
-                )}
-              </div>
-            )}
+          <nav className="flex items-center gap-3" aria-label="Invoice workspace actions">
+            {!publicKey ? <WalletConnect /> : <UserProfile userWallet={publicKey} />}
           </nav>
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto relative z-10">
-        <main id={MAIN_CONTENT_ID} tabIndex={-1} className="pt-20">
-          <h1 className="sr-only">
-            Invoice for {describeAmount(formatAmount(invoice.amount, 7), invoice.assetCode)}
-          </h1>
+      <div className="max-w-5xl mx-auto relative z-10 pt-16">
+        <main id={MAIN_CONTENT_ID} tabIndex={-1}>
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-sm text-gray-500 mb-1">
+                <Link href="/dashboard" className="hover:underline">Dashboard</Link>
+                <span>/</span>
+                <span className="font-mono text-xs">{invoice.id}</span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
+                Seller Invoice Workspace
+              </h1>
+            </div>
+
+            <InvoiceWorkspaceActions
+              invoice={invoice}
+              actions={actions}
+              network={network || 'testnet'}
+              onCancel={handleCancel}
+              cancelling={cancelling}
+            />
+          </div>
 
           {loadError && (
             <div className="mb-6">
@@ -257,107 +257,91 @@ export default function InvoiceDetailPage() {
           )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
-            <div className="card">
-              <h2 className="text-3xl font-bold text-gray-900 mb-8">Invoice Details</h2>
+            <div className="space-y-6">
+              <div className="card">
+                <h2 className="text-2xl font-bold text-gray-900 mb-6">Invoice Details</h2>
 
-              {/*
-                A description list: each of these is a label/value pair, which
-                <dl> states outright rather than leaving to reading order.
-                The amount keeps an explicit name because `bg-clip-text` and
-                the nested span split it into two announcements.
-              */}
-              <dl className="space-y-5">
-                <div className="bg-gradient-to-br from-gray-50 to-slate-50 p-5 rounded-2xl border border-gray-200/50">
-                  <dt className="text-xs text-gray-600 mb-2 font-semibold uppercase tracking-wide">Invoice ID</dt>
-                  <dd className="font-mono text-sm text-gray-900 break-all">{invoice.id}</dd>
-                </div>
-
-                <div className="bg-gradient-to-br from-cyan-50 to-blue-50 p-6 rounded-2xl border-2 border-cyan-200/50 shadow-lg">
-                  <dt className="text-xs text-gray-600 mb-3 font-semibold uppercase tracking-wide">Amount</dt>
-                  {/*
-                    The value is given as hidden visual text plus a screen
-                    reader equivalent, rather than an `aria-label` on the
-                    <dd> — ARIA prohibits naming a <dd>, and axe reports it.
-                  */}
-                  <dd className="flex items-center gap-3 text-4xl sm:text-5xl font-bold bg-gradient-to-r from-cyan-700 to-blue-700 bg-clip-text text-transparent">
-                    <AssetLogo code={invoice.assetCode || 'XLM'} size={32} showName={false} decorative />
-                    <span aria-hidden="true">
-                      {formatAmount(invoice.amount, 7)} <span className="text-2xl">{invoice.assetCode || 'XLM'}</span>
-                    </span>
-                    <span className="sr-only">
-                      {describeAmount(formatAmount(invoice.amount, 7), invoice.assetCode || 'XLM')}
-                    </span>
-                  </dd>
-                </div>
-
-                {invoice.description && (
-                  <div className="border-b pb-4">
-                    <dt className="text-sm text-gray-600 mb-1">Description</dt>
-                    <dd className="text-gray-900">{invoice.description}</dd>
+                <dl className="space-y-5">
+                  <div className="bg-gradient-to-br from-gray-50 to-slate-50 p-5 rounded-2xl border border-gray-200/50">
+                    <dt className="text-xs text-gray-600 mb-2 font-semibold uppercase tracking-wide">Invoice ID</dt>
+                    <dd className="font-mono text-sm text-gray-900 break-all">{invoice.id}</dd>
                   </div>
-                )}
 
-                {invoice.customerName && (
-                  <div className="border-b pb-4">
-                    <dt className="text-sm text-gray-600 mb-1">Client</dt>
-                    <dd className="text-gray-900">{invoice.customerName}</dd>
-                  </div>
-                )}
-
-                {invoice.customerEmail && (
-                  <div className="border-b pb-4">
-                    <dt className="text-sm text-gray-600 mb-1">Client Email</dt>
-                    <dd className="text-gray-900">{invoice.customerEmail}</dd>
-                  </div>
-                )}
-
-                <div className="border-b pb-4">
-                  <dt className="text-sm text-gray-600 mb-1">Memo</dt>
-                  <dd className="font-mono text-sm text-gray-900">{invoice.memo}</dd>
-                </div>
-
-                <div className="border-b pb-4">
-                  <dt className="text-sm text-gray-600 mb-1">Created</dt>
-                  <dd className="text-gray-900">{formatDate(invoice.createdAt)}</dd>
-                </div>
-
-                {effectiveStatus === 'EXPIRED' && (
-                  <div className="border-b pb-4">
-                    <dt className="text-sm text-gray-600 mb-1">Expired At</dt>
-                    <dd className="text-red-700 font-semibold">{formatDate(invoice.expiresAt)}</dd>
-                  </div>
-                )}
-
-                <div className="border-b pb-4">
-                  <dt className="text-sm text-gray-600 mb-1">Status</dt>
-                  <dd className="text-gray-900 font-semibold">
-                    {statusText(effectiveStatus).label}
-                  </dd>
-                </div>
-
-                {effectiveStatus === 'PENDING' && (
-                  <div className="border-b pb-4">
-                    <dt className="text-sm text-gray-600 mb-1">Expires In</dt>
-                    <dd className="text-gray-900 font-semibold">
-                      {getTimeRemaining(invoice.expiresAt)}
+                  <div className="bg-gradient-to-br from-cyan-50 to-blue-50 p-6 rounded-2xl border-2 border-cyan-200/50 shadow-lg">
+                    <dt className="text-xs text-gray-600 mb-3 font-semibold uppercase tracking-wide">Amount</dt>
+                    <dd className="flex items-center gap-3 text-4xl sm:text-5xl font-bold bg-gradient-to-r from-cyan-700 to-blue-700 bg-clip-text text-transparent">
+                      <AssetLogo code={invoice.assetCode || 'XLM'} size={32} showName={false} decorative />
+                      <span aria-hidden="true">
+                        {formatAmount(invoice.amount, 7)} <span className="text-2xl">{invoice.assetCode || 'XLM'}</span>
+                      </span>
+                      <span className="sr-only">
+                        {describeAmount(formatAmount(invoice.amount, 7), invoice.assetCode || 'XLM')}
+                      </span>
                     </dd>
                   </div>
-                )}
 
-                {invoice.paidAt && (
+                  {invoice.description && (
+                    <div className="border-b pb-4">
+                      <dt className="text-sm text-gray-600 mb-1">Description</dt>
+                      <dd className="text-gray-900">{invoice.description}</dd>
+                    </div>
+                  )}
+
+                  {invoice.customerName && (
+                    <div className="border-b pb-4">
+                      <dt className="text-sm text-gray-600 mb-1">Client</dt>
+                      <dd className="text-gray-900">{invoice.customerName}</dd>
+                    </div>
+                  )}
+
+                  {invoice.customerEmail && (
+                    <div className="border-b pb-4">
+                      <dt className="text-sm text-gray-600 mb-1">Client Email</dt>
+                      <dd className="text-gray-900">{invoice.customerEmail}</dd>
+                    </div>
+                  )}
+
                   <div className="border-b pb-4">
-                    <dt className="text-sm text-gray-600 mb-1">Paid At</dt>
-                    <dd className="text-gray-900">{formatDate(invoice.paidAt)}</dd>
+                    <dt className="text-sm text-gray-600 mb-1">Payment Memo</dt>
+                    <dd className="font-mono text-sm text-gray-900">{invoice.memo}</dd>
                   </div>
-                )}
-              </dl>
+
+                  <div className="border-b pb-4">
+                    <dt className="text-sm text-gray-600 mb-1">Status</dt>
+                    <dd className="text-gray-900 font-semibold">
+                      {statusText(effectiveStatus).label}
+                    </dd>
+                  </div>
+
+                  {effectiveStatus === 'PENDING' && (
+                    <div className="border-b pb-4">
+                      <dt className="text-sm text-gray-600 mb-1">Expires In</dt>
+                      <dd className="text-gray-900 font-semibold">
+                        {getTimeRemaining(invoice.expiresAt)}
+                      </dd>
+                    </div>
+                  )}
+
+                  {effectiveStatus === 'EXPIRED' && (
+                    <div className="border-b pb-4">
+                      <dt className="text-sm text-gray-600 mb-1">Expired At</dt>
+                      <dd className="text-red-700 font-semibold">{formatDate(invoice.expiresAt)}</dd>
+                    </div>
+                  )}
+
+                  {invoice.paidAt && (
+                    <div className="border-b pb-4">
+                      <dt className="text-sm text-gray-600 mb-1">Paid At</dt>
+                      <dd className="text-gray-900">{formatDate(invoice.paidAt)}</dd>
+                    </div>
+                  )}
+                </dl>
+              </div>
+
+              {/* Lifecycle Event Timeline */}
+              <InvoiceTimeline items={timelineItems} />
             </div>
 
-            {/*
-              The status side of the page. The wrapper takes focus after a
-              cancel, because that action removes the button it was triggered
-              from and the panel below is the result of it.
-            */}
             <div className="space-y-6" ref={statusPanelRef} tabIndex={-1}>
               {effectiveStatus !== 'PAID' && (
                 <PaymentStatus status={effectiveStatus} txHash={invoice.paymentTxHash} />
