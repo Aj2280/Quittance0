@@ -37,6 +37,56 @@ export const explorerTxLinkFixture = [
   },
 ];
 
+/**
+ * `resolveExplorerNetwork` cases: the invoice's own network wins, then the
+ * app configuration, then the app default. `network` is the value of
+ * NEXT_PUBLIC_STELLAR_NETWORK, which the test sets around each case.
+ */
+export const explorerNetworkFixture = [
+  {
+    name: 'an invoice without a network falls back to the app default (testnet)',
+    invoice: { id: 'inv_1' },
+    network: undefined,
+    expected: 'testnet',
+  },
+  {
+    name: 'the app configuration decides when the invoice has none',
+    invoice: { id: 'inv_1' },
+    network: 'PUBLIC',
+    expected: 'public',
+  },
+  {
+    name: 'MAINNET is the public network under another name',
+    invoice: { id: 'inv_1' },
+    network: 'MAINNET',
+    expected: 'public',
+  },
+  {
+    name: "an invoice's own network wins over the app configuration",
+    invoice: { id: 'inv_1', network: 'PUBLIC' },
+    network: 'TESTNET',
+    expected: 'public',
+  },
+  {
+    name: 'a bare network name is accepted too',
+    invoice: 'PUBLIC',
+    network: 'TESTNET',
+    expected: 'public',
+  },
+  {
+    name: 'an unrecognised network is treated as testnet, never as mainnet',
+    invoice: { id: 'inv_1', network: 'FUTURENET' },
+    network: 'PUBLIC',
+    expected: 'testnet',
+  },
+  {
+    name: 'no argument at all still resolves, so a link is never built for the wrong chain',
+    invoice: undefined,
+    network: 'TESTNET',
+    expected: 'testnet',
+  },
+];
+
 export const explorerTxLinkErrorFixture = [
   {
     name: 'returns null for empty hash',

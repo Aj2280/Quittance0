@@ -27,18 +27,25 @@ async function main() {
   }
 
   const horizon = new StellarSdk.Horizon.Server(config.horizonUrl);
-  const request = async (route, options = {}) => {
+
+  /** One HTTP call, with the status left intact for the caller to judge. */
+  const send = async (route, options = {}) => {
     const response = await fetch(config.apiUrl + route, {
       signal: AbortSignal.timeout(20_000),
       headers: { accept: 'application/json', 'content-type': 'application/json' },
       ...options,
     });
     const body = await response.json().catch(() => null);
-    if (!response.ok) {
+    return { ok: response.ok, status: response.status, body };
+  };
+
+  const request = async (route, options = {}) => {
+    const result = await send(route, options);
+    if (!result.ok) {
       throw new Error((options.method || 'GET') + ' ' + route + ' -> ' +
-        response.status + ': ' + JSON.stringify(body));
+        result.status + ': ' + JSON.stringify(result.body));
     }
-    return body;
+    return result.body;
   };
 
   const health = await request('/health');
@@ -65,6 +72,15 @@ async function main() {
   const invoice = created?.data?.invoice;
   if (!invoice?.id || !invoice?.memo || invoice.status !== 'PENDING') {
     throw new Error('Create invoice did not return a PENDING invoice with id and memo');
+  }
+
+  // The step after create in the reviewer path is the pay link the buyer
+  // receives, so a create that returns no reachable link is a broken loop even
+  // though the invoice exists (issue #429).
+  const paymentInfo = await request('/invoices/' + invoice.id + '/payment-info');
+  const payUrl = paymentInfo?.data?.paymentUrl;
+  if (typeof payUrl !== 'string' || !payUrl.includes(invoice.id)) {
+    throw new Error('Payment info did not return a pay link for invoice ' + invoice.id);
   }
 
   const transaction = new StellarSdk.TransactionBuilder(payerAccount, {
@@ -96,6 +112,38 @@ async function main() {
     throw new Error('Paid state did not survive a fresh API read');
   }
 
+  /*
+   * A verify that accepted anything would make the PAID assertion above
+   * meaningless: the same run would pass whether or not memo matching worked.
+   * This second invoice is offered the transaction that settled the first, so
+   * its memo names another invoice and the API has to refuse it.
+   */
+  const unrelated = await request('/invoices', {
+    method: 'POST',
+    body: JSON.stringify({
+      amount: Number(config.amount),
+      assetCode: 'XLM',
+      description: 'SCF evidence negative verify ' + new Date().toISOString(),
+      sellerPublicKey: config.sellerPublicKey,
+      network: 'TESTNET',
+    }),
+  });
+  const unrelatedInvoice = unrelated?.data?.invoice;
+  if (!unrelatedInvoice?.id) {
+    throw new Error('Create invoice (negative verify) did not return an invoice id');
+  }
+
+  const rejection = await send('/invoices/' + unrelatedInvoice.id + '/verify', {
+    method: 'POST',
+    body: JSON.stringify({ txHash: submitted.hash, network: 'TESTNET' }),
+  });
+  if (rejection.ok) {
+    throw new Error(
+      'Verify accepted a transaction whose memo belongs to another invoice ' +
+      '(invoice ' + unrelatedInvoice.id + ', tx ' + submitted.hash + ')'
+    );
+  }
+
   const artifact = publicArtifact(config, {
     capturedAt: new Date().toISOString(),
     invoiceId: invoice.id,
@@ -103,13 +151,16 @@ async function main() {
     payerPublicKey: payer.publicKey(),
     txHash: submitted.hash,
     finalStatus: reread.data.status,
+    payUrl,
     checks: {
       health: true,
       readiness: true,
       createdPending: true,
+      payLinkReturned: true,
       paymentSubmitted: true,
       verifiedPaid: true,
       rereadPaid: true,
+      negativeVerifyRejected: true,
       simulationDisabled: true,
     },
   });
@@ -127,8 +178,21 @@ async function main() {
     await writeFile(evidencePath, updateEvidenceMarkdown(markdown, artifact), 'utf8');
   }
 
-  console.log('Evidence smoke passed: ' + artifact.explorerUrl);
-  console.log('Artifact: ' + outputPath);
+  /*
+   * The reviewer copies these into EVIDENCE.md and the issue thread, so they
+   * are printed as labelled lines rather than left inside the JSON artifact.
+   */
+  console.log('Evidence smoke passed.');
+  console.log('  Invoice ID:  ' + invoice.id);
+  console.log('  Status:      ' + artifact.finalStatus);
+  console.log('  Pay link:    ' + payUrl);
+  console.log('  Amount:      ' + artifact.amount + ' ' + artifact.asset);
+  console.log('  Memo:        ' + artifact.memo);
+  console.log('  Tx hash:     ' + artifact.txHash);
+  console.log('  Explorer:    ' + artifact.explorerUrl);
+  console.log('  Rejected a foreign transaction on invoice ' + unrelatedInvoice.id +
+    ' with HTTP ' + rejection.status + ' (' + (rejection.body?.code || 'no code') + ')');
+  console.log('  Artifact:    ' + outputPath);
   if (config.writeEvidence) console.log('Updated EVIDENCE.md');
 }
 
