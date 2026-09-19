@@ -5,11 +5,19 @@ on:
   push:
     branches:
       - main
+  # Lets a maintainer re-run the checks against a branch or a release commit
+  # without pushing an empty commit to trigger them.
+  workflow_dispatch:
 
 # A newer push to the same branch supersedes an in-flight run.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# These jobs only read the repository: the bump to `write` is a deliberate
+# change, not a default to inherit.
+permissions:
+  contents: read
 
 jobs:
   backend:
@@ -100,5 +108,7 @@ jobs:
         with:
           node-version: 24
 
+      # The same glob the README documents for a local run, so a new shared
+      # suite is picked up here by existing rather than by editing this file.
       - name: Test
-        run: node --test tests/*.test.mjs
+        run: node --test "tests/**/*.test.mjs"

@@ -8,8 +8,7 @@ import { openInvoicePDF, emailPaymentProof } from '@/lib/export';
 import { canSendProofEmail, getProofMailtoRecipient } from '@/lib/mailto-delivery';
 import { toast } from 'sonner';
 import type { PayPageInvoice } from './pay-page.types';
-import { buildHorizonTxUrl } from '@/lib/explorer-tx-link';
-import { getExplorerTransactionUrl } from '@/lib/stellar';
+import { buildHorizonTxUrl, resolveExplorerNetwork } from '@/lib/explorer-tx-link';
 // The receipt renders a settled (paid / expired / cancelled) record. It shares
 // the same status vocabulary as PaymentStatus and the verification rejection
 // table, so the proof view and the pay page never disagree on wording.
@@ -105,6 +104,17 @@ Stellar Blockchain Payment System
 
   const activeAssetCode = invoice.assetCode || 'XLM';
   const amountLabel = describeAmount(formatAmount(invoice.amount, 7), activeAssetCode);
+  /*
+   * The explorer link has to follow the network the payment was made on. A
+   * hardcoded 'public' sent a testnet seller to a mainnet page that can never
+   * show their transaction, and `buildHorizonTxUrl` refuses a hash that is not
+   * a real transaction id, so the row is only rendered when there is
+   * something to link to.
+   */
+  const explorerUrl = buildHorizonTxUrl(
+    invoice.paymentTxHash,
+    resolveExplorerNetwork(invoice)
+  );
   const canEmail = Boolean(invoice.customerEmail);
   const proofRecipient = getProofMailtoRecipient(invoice as any);
   const emailReasonId = 'receipt-email-reason';
@@ -283,19 +293,18 @@ Stellar Blockchain Payment System
           </p>
         )}
 
-        <a
-          href={
-            buildHorizonTxUrl(invoice.paymentTxHash, 'public') ??
-            getExplorerTransactionUrl(invoice.paymentTxHash || '')
-          }
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn btn-outline w-full flex items-center justify-center gap-2"
-        >
-          <ExternalLink className="w-5 h-5" aria-hidden="true" />
-          View on Stellar Explorer
-          <span className="sr-only"> (opens in a new tab)</span>
-        </a>
+        {explorerUrl && (
+          <a
+            href={explorerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-outline w-full flex items-center justify-center gap-2"
+          >
+            <ExternalLink className="w-5 h-5" aria-hidden="true" />
+            View on Stellar Explorer
+            <span className="sr-only"> (opens in a new tab)</span>
+          </a>
+        )}
 
         <button
           onClick={handleDownload}

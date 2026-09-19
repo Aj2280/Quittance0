@@ -26,7 +26,15 @@ function artifact() {
     payerPublicKey: 'GPAYER',
     txHash: 'a'.repeat(64),
     finalStatus: 'PAID',
-    checks: { health: true, verifiedPaid: true },
+    payUrl: 'https://app.example/pay/invoice-id',
+    checks: {
+      health: true,
+      createdPending: true,
+      payLinkReturned: true,
+      verifiedPaid: true,
+      rereadPaid: true,
+      negativeVerifyRejected: true,
+    },
   });
 }
 
@@ -69,6 +77,20 @@ describe('evidence artifacts', () => {
     assert.equal(output.finalStatus, 'PAID');
     assert.equal(output.explorerUrl, 'https://stellar.expert/explorer/testnet/tx/' + 'a'.repeat(64));
     assert.equal(serialized.includes(baseEnv.EVIDENCE_PAYER_SECRET), false);
+  });
+
+  it('records the pay link the buyer receives', () => {
+    // The loop is create -> pay link -> verify -> PAID, so an artifact without
+    // the link does not evidence the middle step (issue #429).
+    const output = artifact();
+    assert.equal(output.payUrl, 'https://app.example/pay/invoice-id');
+  });
+
+  it('records that a second invoice was refused the first invoice transaction', () => {
+    // Without this check a passing run would also pass if verify ignored the
+    // memo entirely, because the happy path never asks verify to say no.
+    const output = artifact();
+    assert.equal(output.checks.negativeVerifyRejected, true);
   });
 
   it('updates the existing EVIDENCE.md tables without creating another guide', async () => {

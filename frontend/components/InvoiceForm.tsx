@@ -15,6 +15,12 @@ import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
 import { showFreighterInstallPrompt } from './FreighterInstallPrompt';
 import { parseAmountInput } from '@/lib/parse-amount-input';
 import { clearInvoiceDraft, loadInvoiceDraft, saveInvoiceDraft } from '@/lib/invoice-draft';
+import {
+  fieldErrorSummary,
+  fieldErrorsFromApiError,
+  firstInvalidFieldId,
+  formFieldErrors,
+} from '@/lib/invoice-form-validation';
 
 interface InvoiceFormProps {
   onSuccess?: (invoice: any) => void;
@@ -37,8 +43,19 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
   const [customerName, setCustomerName] = useState(initialDraft.customerName ?? '');
   const [customerEmail, setCustomerEmail] = useState(initialDraft.customerEmail ?? '');
   const [apiError, setApiError] = useState<string | null>(null);
+  // Keyed by payload field, whether the shared rule set or the API produced
+  // them, so both routes render in the same place.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [expiresInDays, setExpiresInDays] = useState(initialDraft.expiresInDays ?? 7);
   const { isWrongNetwork } = useWalletStore();
+
+  // Focus follows the refusal: a keyboard user who pressed Create should land
+  // on the input that needs them, not stay on the button that refused.
+  const focusField = (elementId: string | null) => {
+    if (elementId && typeof document !== 'undefined') {
+      document.getElementById(elementId)?.focus();
+    }
+  };
 
   // Whatever is typed is kept for the next mount, so a disconnect in the middle
   // of filling the form costs nothing.

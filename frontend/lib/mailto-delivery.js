@@ -4,11 +4,10 @@
  */
 
 const { assertPaymentProofAvailable, canExportPaymentProof } = require('./payment-proof-policy.js');
-const { buildHorizonTxUrl } = require('./stellar-explorer.js');
-
-// Same default as lib/stellar.ts: without NEXT_PUBLIC_STELLAR_NETWORK the app
-// talks to testnet, so explorer links must point there too.
-const DEFAULT_STELLAR_NETWORK = 'TESTNET';
+// `resolveExplorerNetwork` is the shared rule for which explorer an invoice's
+// transaction lives on. It used to be written twice: once here and once as a
+// hardcoded 'public' in the receipt, and only one of those was ever right.
+const { buildHorizonTxUrl, resolveExplorerNetwork } = require('./stellar-explorer.js');
 
 function isValidEmailFormat(email) {
   if (typeof email !== 'string') return false;
@@ -54,19 +53,6 @@ function canSendProofEmail(invoice) {
 function getProofMailtoRecipient(invoice) {
   if (!invoice) return '';
   return (invoice.customerEmail || invoice.payerEmail || '').trim();
-}
-
-/**
- * Explorer network for an invoice: the invoice's own network wins, then the
- * app configuration, then the app default (TESTNET, as in lib/stellar.ts).
- */
-function resolveInvoiceNetwork(invoice) {
-  const configured =
-    (invoice && invoice.network) ||
-    (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_STELLAR_NETWORK) ||
-    DEFAULT_STELLAR_NETWORK;
-  const normalized = String(configured).trim().toUpperCase();
-  return normalized === 'PUBLIC' || normalized === 'MAINNET' ? 'public' : 'testnet';
 }
 
 function buildInvoiceMailto(invoice, baseUrl) {
@@ -132,7 +118,7 @@ function buildProofMailto(invoice, baseUrl) {
   const payUrl = resolvePayUrl(invoice.id, baseUrl);
   const explorerUrl = buildHorizonTxUrl(
     invoice.paymentTxHash,
-    resolveInvoiceNetwork(invoice)
+    resolveExplorerNetwork(invoice)
   );
 
   const lines = [

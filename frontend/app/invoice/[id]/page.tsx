@@ -15,7 +15,7 @@ import PaymentReceipt from '@/components/PaymentReceipt';
 import AssetLogo from '@/components/AssetLogo';
 import { formatAmount, formatDate, getTimeRemaining } from '@/lib/utils';
 import { MAIN_CONTENT_ID, describeAmount, statusText } from '@/lib/a11y';
-import { ArrowLeft, Share2, Loader2, X, Mail } from 'lucide-react';
+import { ArrowLeft, Share2, Loader2, X, Mail, Link2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useWalletStore } from '@/lib/store';
 import ApiErrorState from '@/components/ApiErrorState';
@@ -26,6 +26,7 @@ import { invoiceSharePath } from '@/lib/invoice-share-path';
 import { shareInvoiceByEmail } from '@/lib/export';
 import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
 import { walletGate } from '@/lib/freighter-availability';
+import { copyWithFeedback } from '@/lib/clipboard-feedback';
 
 export default function InvoiceDetailPage() {
   const params = useParams();
@@ -89,8 +90,11 @@ export default function InvoiceDetailPage() {
     void loadInvoice();
   }, [loadInvoice]);
 
+  /** The canonical share URL for this invoice: the payer's page. */
+  const payLink = () => `${window.location.origin}${invoiceSharePath(invoice.id)}`;
+
   const handleShare = async () => {
-    const url = `${window.location.origin}${invoiceSharePath(invoice.id)}`;
+    const url = payLink();
 
     if (navigator.share) {
       try {
@@ -102,9 +106,25 @@ export default function InvoiceDetailPage() {
       } catch {
         // User cancelled share
       }
+      return;
+    }
+
+    await handleCopyPayLink();
+  };
+
+  /*
+   * Copying the pay link is the one share action that has to work on every
+   * device. The Web Share sheet is not universally available and the async
+   * clipboard is refused outright in an insecure context, so this goes through
+   * `copyWithFeedback`, which reports the failure instead of leaving the
+   * seller with a silent no-op (issue #431).
+   */
+  const handleCopyPayLink = async () => {
+    const copied = await copyWithFeedback(payLink());
+    if (copied) {
+      toast.success('Payment link copied');
     } else {
-      await navigator.clipboard.writeText(url);
-      toast.success('Invoice link copied');
+      toast.error('Could not copy the payment link — select it on the payment page instead');
     }
   };
 
@@ -209,7 +229,7 @@ export default function InvoiceDetailPage() {
                 <Link href={`/pay/${id}`} className="text-cyan-700 hover:underline">
                   payment page
                 </Link>{' '}
-                if you're paying this invoice.
+                if you are paying this invoice.
               </p>
               <div className="flex justify-center">
                 <WalletConnect />
@@ -219,7 +239,7 @@ export default function InvoiceDetailPage() {
             <>
               <h1 className="text-2xl font-bold text-red-700 mb-2">Access Restricted</h1>
               <p className="text-gray-700 mb-6">
-                This invoice belongs to another seller wallet. If you're the customer paying
+                This invoice belongs to another seller wallet. If you are the customer paying
                 this invoice, use the{' '}
                 <Link href={`/pay/${id}`} className="text-cyan-700 hover:underline">
                   payment page
@@ -266,6 +286,21 @@ export default function InvoiceDetailPage() {
             ) : (
               <UserProfile userWallet={publicKey} />
             )}
+            {/*
+              Available in every status, not just PENDING: the link is how a
+              seller re-sends an invoice and how a payer revisits a paid one.
+              The label is on the button because the visible text is hidden
+              below `sm`.
+            */}
+            <button
+              type="button"
+              onClick={() => void handleCopyPayLink()}
+              className="btn btn-outline flex items-center gap-2"
+              aria-label="Copy the payment link for this invoice"
+            >
+              <Link2 className="w-5 h-5" aria-hidden="true" />
+              <span className="hidden sm:inline">Copy pay link</span>
+            </button>
             {effectiveStatus === 'PENDING' && (
               <div className="flex items-center gap-2">
                 {invoice.customerEmail && (
