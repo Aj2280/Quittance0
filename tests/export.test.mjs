@@ -1,8 +1,20 @@
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
+import { createRequire } from 'node:module';
 import test from 'node:test';
 
 register('./export-loader.mjs', import.meta.url);
+
+// The same golden fixtures the quittance-proof suite pins byte-for-byte, so
+// the field checks below cannot drift from the proof schema (issue #434).
+const require = createRequire(import.meta.url);
+const {
+  NETWORK: PROOF_NETWORK,
+  TX_HASH: PROOF_TX_HASH,
+  FIXED_NOW: PROOF_FIXED_NOW,
+  paidInvoice: proofPaidInvoice,
+  pendingInvoice: proofPendingInvoice,
+} = require('../frontend/tests/fixtures/quittance-proof.fixture.js');
 
 const {
   escapeHtml,
@@ -104,6 +116,150 @@ test('buildInvoiceMailto and buildProofMailto generate valid mailto links with e
   assert.ok(proofMailto.startsWith('mailto:alice%40client.example?'));
   assert.ok(proofMailto.includes('subject=Payment%20Proof%20-%20Invoice%20%23TEST-INV%20-%20100%20USDC'));
   assert.ok(proofMailto.includes(encodeURIComponent(`Transaction Hash: ${'b'.repeat(64)}`)));
+});
+
+// ---------------------------------------------------------------------------
+// Print/PDF proof output: required fields, paid and unpaid (issue #434)
+//
+// Proof is the deliverable, and the export paths are the last place a field
+// can go missing without anyone noticing. These cases drive the shipped
+// renderers and report which field disappeared by name, so a dropped field
+// fails here rather than in a reviewer's PDF.
+// ---------------------------------------------------------------------------
+
+const PAID_INVOICE = {
+  id: 'inv_export_paid',
+  amount: 250.5,
+  assetCode: 'USDC',
+  assetIssuer: 'G' + 'D'.repeat(55),
+  description: 'Exported proof fixture',
+  customerName: 'Ada Client',
+  customerEmail: 'ada@example.com',
+  sellerName: 'Quittance Labs',
+  sellerEmail: 'billing@example.com',
+  payerName: 'Ada Payer',
+  payerEmail: 'ada@example.com',
+  status: 'PAID',
+  createdAt: '2026-09-10T09:00:00.000Z',
+  expiresAt: '2026-09-17T09:00:00.000Z',
+  paidAt: '2026-09-13T09:21:44.000Z',
+  memo: 'QUIT-EXPORT-1',
+  sellerPublicKey: 'G' + 'B'.repeat(55),
+  payerPublicKey: 'G' + 'C'.repeat(55),
+  paymentTxHash: 'd'.repeat(64),
+};
+
+/** Runs a `{ field: expected text }` manifest and names what is missing. */
+function assertFieldsPresent(html, required, label) {
+  for (const [field, expected] of Object.entries(required)) {
+    assert.ok(
+      html.includes(expected),
+      `${label} dropped the ${field} (looked for ${JSON.stringify(expected)})`
+    );
+  }
+}
+
+/** The set the issue names: amount, asset, memo, parties, tx hash, explorer. */
+const REQUIRED_PAID_FIELDS = (invoice, explorerUrl) => ({
+  'invoice id': invoice.id,
+  amount: String(invoice.amount),
+  asset: invoice.assetCode,
+  memo: invoice.memo,
+  seller: invoice.sellerPublicKey,
+  payer: invoice.payerPublicKey,
+  'transaction hash': invoice.paymentTxHash,
+  'explorer link': explorerUrl,
+});
+
+function withNetwork(value, run) {
+  const previous = process.env.NEXT_PUBLIC_STELLAR_NETWORK;
+  process.env.NEXT_PUBLIC_STELLAR_NETWORK = value;
+  try {
+    return run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.NEXT_PUBLIC_STELLAR_NETWORK;
+    } else {
+      process.env.NEXT_PUBLIC_STELLAR_NETWORK = previous;
+    }
+  }
+}
+
+test('the paid invoice print/PDF export keeps every required field, explorer link included', () => {
+  const html = withNetwork('TESTNET', () => generateInvoicePDF(PAID_INVOICE));
+
+  assertFieldsPresent(
+    html,
+    REQUIRED_PAID_FIELDS(
+      PAID_INVOICE,
+      'https://stellar.expert/explorer/testnet/tx/' + PAID_INVOICE.paymentTxHash
+    ),
+    'the invoice export'
+  );
+  // The link is clickable, not just printed as text.
+  assert.ok(
+    html.includes(`<a href="https://stellar.expert/explorer/testnet/tx/${PAID_INVOICE.paymentTxHash}">`),
+    'the explorer URL is not an anchor'
+  );
+});
+
+test('the export follows the configured network instead of assuming mainnet', () => {
+  const mainnet = withNetwork('PUBLIC', () => generateInvoicePDF(PAID_INVOICE));
+  assert.ok(mainnet.includes('https://stellar.expert/explorer/public/tx/' + PAID_INVOICE.paymentTxHash));
+  assert.ok(!mainnet.includes('https://stellar.expert/explorer/testnet/tx/'));
+
+  const testnet = withNetwork('TESTNET', () => generateInvoicePDF(PAID_INVOICE));
+  assert.ok(testnet.includes('https://stellar.expert/explorer/testnet/tx/' + PAID_INVOICE.paymentTxHash));
+  assert.ok(!testnet.includes('https://stellar.expert/explorer/public/tx/'));
+});
+
+test('an unpaid invoice has no proof export, as documented', () => {
+  assert.throws(
+    () => generateInvoicePDF({ ...PAID_INVOICE, status: 'PENDING', paymentTxHash: undefined }),
+    /Payment proof is available only after the invoice is paid/
+  );
+  assert.throws(
+    () => generateInvoicePDF({ ...PAID_INVOICE, status: 'EXPIRED', paymentTxHash: undefined }),
+    /this invoice expired unpaid/
+  );
+});
+
+test('the canonical proof export keeps the same required fields for the golden paid fixture', () => {
+  const result = buildQuittanceProof(proofPaidInvoice, {
+    network: PROOF_NETWORK,
+    now: PROOF_FIXED_NOW,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+
+  const html = generateQuittanceProofPDF(result.proof);
+
+  assertFieldsPresent(
+    html,
+    REQUIRED_PAID_FIELDS(
+      { ...proofPaidInvoice, amount: '250.5000000' },
+      'https://stellar.expert/explorer/testnet/tx/' + PROOF_TX_HASH
+    ),
+    'the canonical proof export'
+  );
+});
+
+test('the canonical proof of an unpaid invoice prints no hash and no explorer link', () => {
+  const result = buildQuittanceProof(proofPendingInvoice, {
+    network: PROOF_NETWORK,
+    now: PROOF_FIXED_NOW,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.proof.payment.explorerUrl, null);
+
+  const html = generateQuittanceProofPDF(result.proof);
+
+  assert.ok(!html.includes('stellar.expert'), 'an unpaid proof linked to an explorer');
+  assert.ok(!html.includes(PROOF_TX_HASH), 'an unpaid proof printed a transaction hash');
+  assert.ok(html.includes('PENDING'));
+  // The amount and the parties still have to be there: "unpaid" is not
+  // "blank".
+  assert.ok(html.includes(proofPendingInvoice.amount));
+  assert.ok(html.includes(proofPendingInvoice.sellerPublicKey));
 });
 
 test('generateInvoicePDF and generateQuittanceProofPDF handle canonical QuittanceProof models', () => {

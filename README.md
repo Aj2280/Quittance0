@@ -53,6 +53,21 @@ key is available, switch networks when Freighter is not on
 `NEXT_PUBLIC_STELLAR_NETWORK`, and continue only when the wallet is connected on
 the expected network.
 
+### Create-form draft across a wallet disconnect
+
+The create form is only rendered while that gate is satisfied, so locking or
+disconnecting Freighter mid-form unmounts it. The fields a person typed —
+amount, asset, description, seller and client name/email, and the payment window
+— are kept in `sessionStorage` by `frontend/lib/invoice-draft.js`: one key per
+tab, dropped when the draft is empty and cleared once the invoice is created.
+Nothing about the wallet is stored (no public key, signature, balance or invoice
+id), so the draft holds only what was typed into the form.
+
+Reconnecting on the expected network restores those fields and re-enables create
+in the same page load; reconnecting on the wrong network keeps create
+unavailable and shows the existing mismatch prompt instead of submitting an
+invoice the verifier would reject.
+
 ---
 
 ## Payment verification contract

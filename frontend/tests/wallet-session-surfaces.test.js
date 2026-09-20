@@ -12,7 +12,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const React = require('react');
 
-const { loadBundle, installDom, render } = require('./support/a11y-harness');
+const { loadBundle, installDom, getDom, render } = require('./support/a11y-harness');
 
 installDom();
 const bundle = loadBundle();
@@ -84,6 +84,17 @@ function primeFor(rows) {
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 25));
+
+/** React reads `value` through its own setter, so a plain assignment is ignored. */
+function setInputValue(element, value) {
+  const prototype =
+    element.tagName === 'TEXTAREA'
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
+  setter.call(element, value);
+  element.dispatchEvent(new window.Event('input', { bubbles: true }));
+}
 
 test('a network mismatch keeps the dashboard from showing the seller invoices', async () => {
   walletOnPublic(ALICE);
@@ -210,15 +221,6 @@ test('disconnecting hides the seller rows and asks for a wallet', async () => {
 test('a typed create draft comes back after the form remounts', async () => {
   walletOnTestnet(ALICE);
 
-  const setInputValue = (element, value) => {
-    const setter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype,
-      'value'
-    ).set;
-    setter.call(element, value);
-    element.dispatchEvent(new window.Event('input', { bubbles: true }));
-  };
-
   const first = await render(React.createElement(bundle.InvoiceForm, { userWallet: ALICE }));
   try {
     const amountInput = first.container.querySelector('#invoice-amount');
@@ -239,4 +241,94 @@ test('a typed create draft comes back after the form remounts', async () => {
   } finally {
     second.unmount();
   }
+});
+
+/**
+ * Issue #432, at the level a person experiences it: the landing page, not the
+ * form component. Freighter locking or disconnecting mid-form must not cost
+ * the amount, the description or the client email someone just typed, and
+ * reconnecting on the expected network must bring create back without a page
+ * reload. Reconnecting on the wrong network must still refuse.
+ */
+test('a disconnect mid-form keeps the draft and reconnects create without a reload', async () => {
+  getDom().window.sessionStorage.clear();
+  primeFor([]);
+  walletOnTestnet(ALICE);
+
+  // Fill part of the form, then lose the wallet.
+  const typing = await render(React.createElement(bundle.HomePage));
+  try {
+    const amount = typing.container.querySelector('#invoice-amount');
+    assert.ok(amount, 'the create form did not render for a ready wallet');
+    setInputValue(amount, '25.5');
+    setInputValue(typing.container.querySelector('#invoice-description'), 'March design work');
+    setInputValue(typing.container.querySelector('#customer-email'), 'ada@example.com');
+    await settle();
+  } finally {
+    typing.unmount();
+  }
+
+  setWallet({});
+  const disconnected = await render(React.createElement(bundle.HomePage));
+  try {
+    // Nothing may be created while the wallet is gone, and the page has to say
+    // so rather than silently dropping the form.
+    assert.equal(
+      disconnected.container.querySelector('#invoice-amount'),
+      null,
+      'the create form stayed usable after the wallet disconnected'
+    );
+    assert.ok(
+      disconnected.container.querySelector('[data-gate-status]'),
+      'the page did not explain why create is unavailable'
+    );
+  } finally {
+    disconnected.unmount();
+  }
+
+  // Reconnecting on TESTNET restores the fields and makes create available
+  // again, in the same page load.
+  walletOnTestnet(ALICE);
+  const reconnected = await render(React.createElement(bundle.HomePage));
+  try {
+    const amount = reconnected.container.querySelector('#invoice-amount');
+    assert.equal(amount.value, '25.5', 'the typed amount was lost across the disconnect');
+    assert.equal(
+      reconnected.container.querySelector('#invoice-description').value,
+      'March design work',
+      'the typed description was lost across the disconnect'
+    );
+    assert.equal(
+      reconnected.container.querySelector('#customer-email').value,
+      'ada@example.com',
+      'the typed client email was lost across the disconnect'
+    );
+    assert.equal(
+      reconnected.container.querySelector('button[type="submit"]').disabled,
+      false,
+      'create stayed disabled after reconnecting on the expected network'
+    );
+  } finally {
+    reconnected.unmount();
+  }
+
+  // Reconnecting on the wrong network still blocks create, with the existing
+  // mismatch UX rather than a form that submits and is refused server-side.
+  walletOnPublic(ALICE);
+  const wrongNetwork = await render(React.createElement(bundle.HomePage));
+  try {
+    const gatePrompt = wrongNetwork.container.querySelector('[data-gate-status]');
+    assert.ok(gatePrompt, 'the wrong-network state offered no prompt at all');
+    assert.equal(gatePrompt.getAttribute('data-gate-status'), 'wrong_network');
+    assert.match(gatePrompt.textContent, /Testnet/, 'the prompt does not name the expected network');
+    assert.equal(
+      wrongNetwork.container.querySelector('#invoice-amount'),
+      null,
+      'create was offered on a mismatched network'
+    );
+  } finally {
+    wrongNetwork.unmount();
+  }
+
+  getDom().window.sessionStorage.clear();
 });

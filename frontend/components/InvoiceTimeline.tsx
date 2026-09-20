@@ -4,7 +4,7 @@ import { Circle, CheckCircle2, XCircle, Clock, AlertTriangle } from 'lucide-reac
 import { formatAddress, formatDate } from '@/lib/utils';
 import { buildInvoiceTimelineEvents } from '@/lib/invoice-timeline';
 import { getTimeRemaining } from '@/lib/utils';
-import { buildHorizonTxUrl } from '@/lib/explorer-tx-link';
+import { buildHorizonTxUrl, resolveExplorerNetwork } from '@/lib/explorer-tx-link';
 import { getExplorerTransactionUrl } from '@/lib/stellar';
 
 interface InvoiceTimelineInvoice {
@@ -17,6 +17,7 @@ interface InvoiceTimelineInvoice {
   payerPublicKey?: string;
   paymentTxHash?: string;
   latePaymentWarningCode?: 'PAYMENT_RECEIVED_AFTER_EXPIRY' | 'PAYMENT_RECEIVED_AFTER_CANCEL' | null;
+  network?: string;
 }
 
 interface InvoiceTimelineProps {
@@ -88,9 +89,16 @@ export default function InvoiceTimeline({ invoice, now }: InvoiceTimelineProps) 
                   )}
                   {event.paymentTxHash && (
                     <a
+                      /*
+                        The explorer follows the invoice's network (issue
+                        #431): a hardcoded 'public' sent a testnet seller to a
+                        mainnet page that cannot show this transaction.
+                      */
                       href={
-                        buildHorizonTxUrl(event.paymentTxHash, 'public') ??
-                        getExplorerTransactionUrl(event.paymentTxHash)
+                        buildHorizonTxUrl(
+                          event.paymentTxHash,
+                          resolveExplorerNetwork(invoice)
+                        ) ?? getExplorerTransactionUrl(event.paymentTxHash)
                       }
                       target="_blank"
                       rel="noopener noreferrer"
