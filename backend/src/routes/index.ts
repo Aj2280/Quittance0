@@ -15,7 +15,7 @@ router.get('/ready', readinessHandler(postgresInvoiceStorage.mode));
 router.get('/health/ready', readinessHandler(postgresInvoiceStorage.mode));
 
 // Invoice routes — same handlers the MVP server uses, backed by PostgreSQL
-router.use(createInvoiceRouter({ storage: postgresInvoiceStorage }));
+router.use(createInvoiceRouter({ storage: postgresInvoiceStorage, paymentMonitor: paymentMonitorService }));
 
 // Stellar routes
 router.get('/stellar/account', stellarController.getAccountInfo.bind(stellarController));
