@@ -117,6 +117,40 @@ ALTER TABLE invoices ADD CONSTRAINT invoices_late_payment_warning_code_check
     late_payment_warning_code IN ('PAYMENT_RECEIVED_AFTER_EXPIRY', 'PAYMENT_RECEIVED_AFTER_CANCEL')
   );
 
+-- Unique constraint: one transaction hash may settle at most one invoice.
+-- Added idempotently so re-running the migration on an upgraded database is safe.
+-- The constraint is partial (WHERE payment_tx_hash IS NOT NULL) so unpaid rows
+-- do not consume unique index space and NULL values never collide.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'invoices_payment_tx_hash_unique'
+      AND conrelid = 'invoices'::regclass
+  ) THEN
+    -- Check for any existing duplicates before adding the constraint.
+    -- A duplicate means a bug in prior code; surface it rather than silently skip.
+    IF (
+      SELECT COUNT(*) FROM (
+        SELECT payment_tx_hash
+        FROM invoices
+        WHERE payment_tx_hash IS NOT NULL
+        GROUP BY payment_tx_hash
+        HAVING COUNT(*) > 1
+      ) dupes
+    ) > 0 THEN
+      RAISE EXCEPTION
+        'Cannot add payment_tx_hash uniqueness: duplicate hashes exist in invoices table. '
+        'Resolve conflicts before re-running the migration.';
+    END IF;
+
+    CREATE UNIQUE INDEX invoices_payment_tx_hash_unique
+      ON invoices(payment_tx_hash)
+      WHERE payment_tx_hash IS NOT NULL;
+  END IF;
+END
+$$;
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_invoices_seller ON invoices(seller_public_key);
 CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
