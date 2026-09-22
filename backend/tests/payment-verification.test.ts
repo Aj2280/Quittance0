@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { Account, Keypair, MuxedAccount } from '@stellar/stellar-sdk';
 import {
   VERIFICATION_MESSAGES,
   VERIFICATION_CODES,
@@ -347,6 +348,61 @@ describe('verifyHorizonPayment — check ordering', () => {
       ],
     };
     assert.equal(codeOf(verifyHorizonPayment(amountFixed)), 'ASSET_MISMATCH');
+  });
+});
+
+describe('verifyHorizonPayment — muxed destinations', () => {
+  const sellerKeypair = Keypair.random();
+  const sellerG = sellerKeypair.publicKey();
+  const sellerMuxed = new MuxedAccount(new Account(sellerG, '0'), '777').accountId();
+  const otherMuxed = new MuxedAccount(new Account(Keypair.random().publicKey(), '0'), '888').accountId();
+
+  function muxedInput(to: string): VerifyPaymentInput {
+    return input({
+      expected: expected({ destination: sellerG }),
+      operations: [paymentOp({ to })],
+    });
+  }
+
+  it('settles a payment to a muxed M... account of the seller', () => {
+    const result = verifyHorizonPayment(muxedInput(sellerMuxed));
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.value.to, sellerMuxed);
+    assert.equal(result.value.toMuxedId, '777');
+  });
+
+  it('rejects a payment to a muxed account of someone else', () => {
+    const result = verifyHorizonPayment(muxedInput(otherMuxed));
+    assert.equal(codeOf(result), 'DESTINATION_MISMATCH');
+  });
+
+  it('fails closed on a malformed muxed destination instead of coercing it', () => {
+    for (const bad of [
+      'M' + 'A'.repeat(68),
+      sellerMuxed.slice(0, -1) + '0',
+      'MNOTREALMUXEDADDRESS',
+      'S' + sellerG.slice(1),
+    ]) {
+      assert.equal(codeOf(verifyHorizonPayment(muxedInput(bad))), 'DESTINATION_MISMATCH', bad);
+    }
+  });
+
+  it('picks the muxed seller operation over an unrelated payment', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ destination: sellerG }),
+        operations: [
+          paymentOp({ to: OTHER_ACCOUNT }),
+          paymentOp({ to: sellerMuxed }),
+        ],
+      })
+    );
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.value.toMuxedId, '777');
   });
 });
 

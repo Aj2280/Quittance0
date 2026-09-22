@@ -161,6 +161,7 @@ class MemoryStorage {
         settlementContext: settlement.settlementContext,
         priorStatus: settlement.priorStatus,
         latePaymentWarningCode: settlement.latePaymentWarningCode,
+        ...(options.destinationMuxedId ? { destinationMuxedId: options.destinationMuxedId } : {}),
       });
     }
 

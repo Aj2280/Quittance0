@@ -213,6 +213,7 @@ class FakePostgresDb implements Queryable {
           settlementContext: row.settlement_context,
           priorStatus: row.prior_status,
           latePaymentWarningCode: row.late_payment_warning_code,
+          ...(params[6] ? { destinationMuxedId: params[6] } : {}),
         },
       });
       return { rows: [{ ...row }], rowCount: 1 };

@@ -10,6 +10,7 @@
  * Horizon and hand them in. See README.md "Payment verification contract".
  */
 
+import { MuxedAccount, StrKey } from '@stellar/stellar-sdk';
 import {
   assetsMatch,
   formatAssetIdentity,
@@ -219,9 +220,60 @@ export function normalizePaymentOperation(
   return null;
 }
 
+export interface ResolvedDestination {
+  /** Underlying Ed25519 account the payment lands on. */
+  accountId: string;
+  /** Muxed id, present only when the destination was an `M...` address. */
+  muxedId?: string;
+}
+
+/**
+ * Resolve a Horizon payment destination to the account it lands on.
+ *
+ * `G...` addresses resolve to themselves. `M...` muxed addresses decode through
+ * the SDK to the base account and the muxed id — never string-sliced, since a
+ * sliced `M` could hide a different underlying account. Anything else fails
+ * closed (`null`) so a malformed destination can never coerce into a match.
+ */
+export function resolveDestinationAccount(
+  destination: string | null | undefined,
+): ResolvedDestination | null {
+  if (!destination) return null;
+  if (StrKey.isValidEd25519PublicKey(destination)) {
+    return { accountId: destination };
+  }
+  if (!StrKey.isValidMed25519PublicKey(destination)) return null;
+  try {
+    const muxed = MuxedAccount.fromAddress(destination, '0');
+    return { accountId: muxed.baseAccount().accountId(), muxedId: muxed.id() };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a payment operation's `to` lands on the invoice seller. A literal
+ * match always counts; otherwise the operation's destination resolves through
+ * muxed-account rules and the underlying `G` account is compared. The returned
+ * resolution carries the muxed id for event/proof recording, or null on no
+ * match — including malformed destinations, which fail closed.
+ */
+export function destinationMatches(
+  operationTo: string,
+  expectedDestination: string,
+): ResolvedDestination | null {
+  if (operationTo === expectedDestination) {
+    return { accountId: operationTo };
+  }
+  const resolved = resolveDestinationAccount(operationTo);
+  if (!resolved || resolved.accountId !== expectedDestination) return null;
+  return resolved;
+}
+
 /**
  * Finds the payment-delivering operation for an invoice.
- * If destination is given, prioritizes an operation paying that destination.
+ * If destination is given, prioritizes an operation paying that destination —
+ * including a muxed `M...` address whose underlying account is the seller.
  *
  * @param operations - List of operations from Horizon.
  * @param destination - Target payment destination.
@@ -240,7 +292,7 @@ export function findPaymentOperation(
   }
 
   if (destination) {
-    const match = candidates.find((op) => op.to === destination);
+    const match = candidates.find((op) => destinationMatches(op.to, destination) !== null);
     if (match) {
       return match;
     }
@@ -252,7 +304,10 @@ export function findPaymentOperation(
 export interface VerifiedPayment {
   txHash: string;
   from: string;
+  /** The on-chain destination as reported by Horizon (`G...` or `M...`). */
   to: string;
+  /** Muxed id when `to` was a muxed `M...` account of the seller. */
+  toMuxedId?: string;
   amount: string;
   assetCode: string;
   assetIssuer?: string;
@@ -335,7 +390,11 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
     return failure('MEMO_MISMATCH');
   }
 
-  if (paymentOp.to !== expected.destination) {
+  // Muxed `M...` destinations settle when the underlying `G` account is the
+  // invoice seller; anything else — including malformed muxed strings — fails
+  // closed here.
+  const destinationResolution = destinationMatches(paymentOp.to, expected.destination);
+  if (!destinationResolution) {
     return failure('DESTINATION_MISMATCH');
   }
 
@@ -366,6 +425,7 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
       txHash: hashCheck.value,
       from: paymentOp.from,
       to: paymentOp.to,
+      ...(destinationResolution.muxedId ? { toMuxedId: destinationResolution.muxedId } : {}),
       amount: paymentOp.amount,
       assetCode: paidAssetCode,
       assetIssuer: paymentOp.assetType === 'native' ? undefined : paymentOp.assetIssuer,

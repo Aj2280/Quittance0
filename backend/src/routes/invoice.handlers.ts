@@ -459,7 +459,10 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
             verification.value.txHash,
             verification.value.from,
             payerCheck.value,
-            { settledAt: verification.value.settledAt }
+            {
+              settledAt: verification.value.settledAt,
+              destinationMuxedId: verification.value.toMuxedId,
+            }
           );
           options.paymentMonitor?.unregisterWatch(id);
           

@@ -185,7 +185,8 @@ export class InvoiceService {
             'settledAt', settled_at,
             'settlementContext', settlement_context,
             'priorStatus', prior_status,
-            'latePaymentWarningCode', late_payment_warning_code
+            'latePaymentWarningCode', late_payment_warning_code,
+            'destinationMuxedId', $7::text
           ))
         FROM settled
         RETURNING id
@@ -201,6 +202,7 @@ export class InvoiceService {
         payerInfo?.payerName || null,
         payerInfo?.payerEmail || null,
         settledAt,
+        options?.destinationMuxedId ?? null,
       ]);
 
       if (result.rows.length === 0) {
