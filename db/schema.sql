@@ -141,3 +141,12 @@ SELECT
   asset_code
 FROM invoices
 GROUP BY seller_public_key, asset_code;
+
+-- Issue #514: replayed creates collapse onto the original row instead of
+-- minting a second memo + pay link. The partial unique index keeps NULL
+-- (legacy/keyless) rows untouched while giving the service an atomic
+-- ON CONFLICT arbiter for (seller, key) races.
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_seller_idempotency
+  ON invoices (seller_public_key, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;

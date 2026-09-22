@@ -323,6 +323,12 @@ The dashboard sends the connected wallet on every call:
 `GET /api/invoices?sellerPublicKey=G...` and `GET /api/invoices/stats?sellerPublicKey=G...`
 both return `400` when the seller key is missing.
 
+`POST /api/invoices` is idempotent (issue #514): send an `Idempotency-Key`
+header (or `idempotencyKey` body field) and a replay returns the original
+invoice — same id, memo, and pay link — instead of minting a second one.
+Keyless retries are still safe: identical create intent from the same seller
+inside a 2-minute window collapses onto the original row.
+
 ### 4) Tests
 
 ```bash
