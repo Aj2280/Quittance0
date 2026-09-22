@@ -121,18 +121,26 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
       };
     }
 
+    const stellarPayment = await generateStellarPaymentQR(
+      invoice.sellerPublicKey,
+      invoice.amount.toString(),
+      invoice.assetCode || 'XLM',
+      invoice.memo,
+      invoice.assetIssuer,
+      paymentUrl
+    );
+
     return {
       paymentAvailable: true,
       paymentUrl,
       statusPollingIntervalMs: PAYMENT_STATUS_POLL_INTERVAL_MS,
       qrCode: await generatePaymentQR(paymentUrl),
-      stellarQrCode: await generateStellarPaymentQR(
-        invoice.sellerPublicKey,
-        invoice.amount.toString(),
-        invoice.assetCode || 'XLM',
-        invoice.memo,
-        invoice.assetIssuer
-      ),
+      stellarQrCode: stellarPayment.qrDataUrl,
+      stellarUri: stellarPayment.uri,
+      // False when the SEP-0007 URI outgrew the QR budget and the image
+      // encodes the HTTPS pay link instead — the payer still gets the full
+      // URI as copyable text.
+      stellarQrEncodesUri: stellarPayment.encodesSep7Uri,
     };
   };
 
@@ -171,6 +179,8 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           statusPollingIntervalMs: payment.statusPollingIntervalMs,
           qrCode: payment.qrCode,
           stellarQrCode: payment.stellarQrCode,
+          stellarUri: payment.stellarUri,
+          stellarQrEncodesUri: payment.stellarQrEncodesUri,
         });
       } catch (error: any) {
         logError('Create invoice error:', error, requestId);

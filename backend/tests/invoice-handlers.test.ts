@@ -368,8 +368,32 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       );
       assert.match(res.body.data.qrCode, /^data:image\/png;base64,/);
       assert.match(res.body.data.stellarQrCode, /^data:image\/png;base64,/);
+      // The XLM URI fits the QR budget, so the code encodes it directly and
+      // the payer still sees the full SEP-0007 string as copyable text.
+      assert.match(res.body.data.stellarUri, /^web\+stellar:pay\?/);
+      assert.equal(res.body.data.stellarQrEncodesUri, true);
       assert.equal(res.body.data.statusPollingIntervalMs, 3000);
       assert.equal(res.body.data.paymentAvailable, true);
+    });
+
+    it('falls back to the HTTPS pay link when a USDC URI exceeds the QR budget (#510)', async () => {
+      const res = await call(
+        handlers().createInvoice,
+        createReq({
+          body: invoiceBody({ assetCode: 'USDC', assetIssuer: USDC_ISSUER }),
+        })
+      );
+
+      assert.equal(res.statusCode, 201);
+      const data = res.body.data;
+      assert.equal(data.stellarQrEncodesUri, false);
+      assert.match(data.stellarQrCode, /^data:image\/png;base64,/);
+      // The full SEP-0007 URI — issuer and memo intact — is still returned
+      // for copy / open-in-wallet even though the QR encodes the pay link.
+      assert.match(data.stellarUri, /^web\+stellar:pay\?/);
+      assert.match(data.stellarUri, /asset_code=USDC/);
+      assert.match(data.stellarUri, new RegExp(`asset_issuer=${USDC_ISSUER}`));
+      assert.match(data.stellarUri, /memo=/);
     });
 
     it('normalizes lowercase assetCode to uppercase on creation', async () => {
