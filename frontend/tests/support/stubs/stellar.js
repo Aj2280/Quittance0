@@ -21,6 +21,7 @@ export const readFreighterSession = async () => ({
 });
 export const stopFreighterWalletWatcher = () => () => {};
 export const getAccountBalance = async () => [];
+export const preflightAssetTrustline = async () => ({ ok: true, code: 'OK' });
 export const sendPayment = async () => '';
 export const getExplorerTransactionUrl = (txHash) =>
   `https://stellar.expert/explorer/testnet/tx/${txHash}`;
@@ -39,6 +40,7 @@ const stellarExports = {
   requestWalletAccess,
   getUserPublicKey,
   getAccountBalance,
+  preflightAssetTrustline,
   sendPayment,
   getExplorerTransactionUrl,
   describeStellarNetworkError,

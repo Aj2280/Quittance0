@@ -8,8 +8,10 @@ import {
   requestWalletAccess,
   getFreighterNetwork,
   isWrongNetwork,
+  preflightAssetTrustline,
   NETWORK_DISPLAY_NAME,
 } from '@/lib/stellar';
+import type { TrustlinePreflight } from '@/lib/trustline-preflight';
 import { toast } from 'sonner';
 import { Wallet, Loader2 } from 'lucide-react';
 import { invoiceApi } from '@/lib/api';
@@ -53,6 +55,7 @@ export default function PaymentButton({
   onError,
 }: PaymentButtonProps) {
   const [loading, setLoading] = useState(false);
+  const [preflight, setPreflight] = useState<TrustlinePreflight | null>(null);
   const { publicKey, connected, network, freighterAvailable } = useWalletStore();
   // Same session, same gate as the create form and the dashboard: a mismatch
   // blocks all three from one place (issue #442).
@@ -115,6 +118,29 @@ export default function PaymentButton({
         onError?.(wrongMsg);
         return;
       }
+
+      // Credit assets need a payer trustline; check it before Freighter opens
+      // so a missing one blocks submit with its own state (issue #506). A
+      // Horizon outage is retryable — never a silent pass.
+      if (assetCode && assetCode.toUpperCase() !== 'XLM' && publicKey) {
+        const check = await preflightAssetTrustline(publicKey, assetCode, assetIssuer);
+        if (!check.ok) {
+          setPreflight(check);
+          toast.error(
+            check.code === 'MISSING_TRUSTLINE'
+              ? `${assetCode} trustline required`
+              : 'Balance check failed',
+            {
+              id: PAY_TOAST_ID,
+              description: check.message,
+              duration: check.code === 'MISSING_TRUSTLINE' ? 10000 : undefined,
+            }
+          );
+          onError?.(check.message || 'Payment preflight failed');
+          return;
+        }
+      }
+      setPreflight(null);
 
       toast.loading('Confirm in wallet...', { id: PAY_TOAST_ID });
       const txHash = await sendPayment(destination, amount, memo, assetCode, assetIssuer);
@@ -179,33 +205,60 @@ export default function PaymentButton({
      * `aria-busy` reports the in-flight attempt; the label change to
      * "Processing..." covers the visual side.
      */
-    <button
-      type="button"
-      onClick={handlePayment}
-      disabled={loading || !destination || !amount || invoiceStatus !== 'PENDING'}
-      aria-disabled={!gate.ready}
-      aria-busy={loading}
-      data-payment-state={loading ? 'processing' : gate.status}
-      aria-label={
-        loading
-          ? `Processing payment of ${amount} ${assetCode}`
-          : gate.ready
-            ? `Pay ${amount} ${assetCode} with Freighter`
-            : gate.message
-      }
-      className="btn btn-primary w-full flex items-center justify-center gap-2 text-lg py-4"
-    >
-      {loading ? (
-        <>
-          <Loader2 className="w-6 h-6 animate-spin" aria-hidden="true" />
-          Processing...
-        </>
-      ) : (
-        <>
-          <Wallet className="w-6 h-6" aria-hidden="true" />
-          Pay with Freighter
-        </>
+    <>
+      <button
+        type="button"
+        onClick={handlePayment}
+        disabled={loading || !destination || !amount || invoiceStatus !== 'PENDING'}
+        aria-disabled={!gate.ready}
+        aria-busy={loading}
+        data-payment-state={loading ? 'processing' : gate.status}
+        aria-label={
+          loading
+            ? `Processing payment of ${amount} ${assetCode}`
+            : gate.ready
+              ? `Pay ${amount} ${assetCode} with Freighter`
+              : gate.message
+        }
+        className="btn btn-primary w-full flex items-center justify-center gap-2 text-lg py-4"
+      >
+        {loading ? (
+          <>
+            <Loader2 className="w-6 h-6 animate-spin" aria-hidden="true" />
+            Processing...
+          </>
+        ) : (
+          <>
+            <Wallet className="w-6 h-6" aria-hidden="true" />
+            Pay with Freighter
+          </>
+        )}
+      </button>
+      {preflight && !preflight.ok && (
+        <div
+          role="alert"
+          data-preflight={preflight.code}
+          className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+        >
+          <span className="font-semibold block mb-0.5">
+            {preflight.code === 'MISSING_TRUSTLINE'
+              ? `${assetCode} trustline required`
+              : preflight.code === 'ACCOUNT_NOT_FOUND'
+                ? 'Wallet account not funded'
+                : 'Balance check failed'}
+          </span>
+          <span>{preflight.message}</span>
+          {preflight.retryable && (
+            <button
+              type="button"
+              onClick={handlePayment}
+              className="mt-2 block text-xs font-medium underline"
+            >
+              Retry the balance check
+            </button>
+          )}
+        </div>
       )}
-    </button>
+    </>
   );
 }
