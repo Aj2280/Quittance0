@@ -327,6 +327,7 @@ export default function PaymentPage() {
                   <PayVerifyPanel
                     txHash={page.txHash}
                     verifying={page.verifying}
+                    resumeHint={page.resumeAvailable}
                     onChange={page.setTxHash}
                     onVerify={() => void page.verify()}
                   />

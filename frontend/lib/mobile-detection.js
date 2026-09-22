@@ -124,6 +124,10 @@ function buildSep0007PayUri(params) {
     searchParams.set('network_passphrase', params.networkPassphrase.trim());
   }
 
+  if (params.callback && params.callback.trim() !== '') {
+    searchParams.set('callback', `url:${params.callback.trim()}`);
+  }
+
   return `web+stellar:pay?${searchParams.toString()}`;
 }
 

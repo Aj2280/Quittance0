@@ -54,7 +54,7 @@ const ALIASES = {
 
 /** Everything the audit renders, re-exported from one entry point. */
 const ENTRY_SOURCE = `
-export { setResponse, resetResponses } from 'axios';
+export { setResponse, resetResponses, getCalls, resetCalls } from 'axios';
 export { useWalletStore } from '@/lib/store';
 export { default as HomePage } from '@/app/page';
 export { default as DashboardPage } from '@/app/dashboard/page';
@@ -77,40 +77,40 @@ let cachedBundle = null;
 function loadBundle() {
   if (cachedBundle) return cachedBundle;
 
-  const entryPath = path.join(ROOT, 'tests', 'support', '.a11y-entry.jsx');
-  fs.writeFileSync(entryPath, ENTRY_SOURCE);
+  // `stdin` keeps the entry point in memory: two test processes bundling at
+  // the same time must not fight over a shared temp file.
+  const result = esbuild.buildSync({
+    stdin: {
+      contents: ENTRY_SOURCE,
+      resolveDir: ROOT,
+      sourcefile: 'a11y-entry.jsx',
+      loader: 'jsx',
+    },
+    absWorkingDir: ROOT,
+    bundle: true,
+    write: false,
+    format: 'cjs',
+    platform: 'node',
+    jsx: 'automatic',
+    alias: ALIASES,
+    // React itself is shared with the test process, so the components mount
+    // into the same renderer the test drives.
+    external: ['react', 'react-dom'],
+    tsconfig: 'tsconfig.json',
+    define: {
+      'process.env.NEXT_PUBLIC_STELLAR_NETWORK': '"TESTNET"',
+      'process.env.NEXT_PUBLIC_API_URL': '"http://127.0.0.1:3001/api"',
+    },
+    logLevel: 'silent',
+  });
 
-  try {
-    const result = esbuild.buildSync({
-      entryPoints: [path.relative(ROOT, entryPath)],
-      absWorkingDir: ROOT,
-      bundle: true,
-      write: false,
-      format: 'cjs',
-      platform: 'node',
-      jsx: 'automatic',
-      alias: ALIASES,
-      // React itself is shared with the test process, so the components mount
-      // into the same renderer the test drives.
-      external: ['react', 'react-dom'],
-      tsconfig: 'tsconfig.json',
-      define: {
-        'process.env.NEXT_PUBLIC_STELLAR_NETWORK': '"TESTNET"',
-        'process.env.NEXT_PUBLIC_API_URL': '"http://127.0.0.1:3001/api"',
-      },
-      logLevel: 'silent',
-    });
+  const compiled = new Module('a11y-bundle');
+  compiled.filename = path.join(ROOT, 'a11y-bundle.js');
+  compiled.paths = Module._nodeModulePaths(ROOT);
+  compiled._compile(result.outputFiles[0].text, compiled.filename);
 
-    const compiled = new Module('a11y-bundle');
-    compiled.filename = path.join(ROOT, 'a11y-bundle.js');
-    compiled.paths = Module._nodeModulePaths(ROOT);
-    compiled._compile(result.outputFiles[0].text, compiled.filename);
-
-    cachedBundle = compiled.exports;
-    return cachedBundle;
-  } finally {
-    fs.rmSync(entryPath, { force: true });
-  }
+  cachedBundle = compiled.exports;
+  return cachedBundle;
 }
 
 /** Globals React DOM expects to find on the host. */

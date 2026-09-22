@@ -20,6 +20,12 @@ export interface Sep0007PayParams {
   memo?: string;
   memoType?: string;
   networkPassphrase?: string;
+  /**
+   * Same-origin page the wallet should return the payer to after signing,
+   * emitted as SEP-0007 `callback=url:<value>`. Build it with
+   * `buildPayCallbackUrl` — never from a caller-supplied return_url.
+   */
+  callback?: string;
 }
 
 const IOS_REGEX = /iPhone|iPad|iPod/i;
@@ -146,6 +152,10 @@ export function buildSep0007PayUri(params: Sep0007PayParams): string {
 
   if (params.networkPassphrase && params.networkPassphrase.trim() !== '') {
     searchParams.set('network_passphrase', params.networkPassphrase.trim());
+  }
+
+  if (params.callback && params.callback.trim() !== '') {
+    searchParams.set('callback', `url:${params.callback.trim()}`);
   }
 
   return `web+stellar:pay?${searchParams.toString()}`;
