@@ -98,8 +98,27 @@ function createFakePostgres() {
     }
 
     if (sql.startsWith('INSERT INTO payment_events')) {
-      events.push({ invoiceId: params[0], eventType: params[1] });
+      events.push({
+        id: `evt-${events.length + 1}`,
+        invoiceId: params[0],
+        eventType: params[1],
+        eventData: typeof params[2] === 'string' ? JSON.parse(params[2]) : params[2] ?? null,
+        createdAt: new Date(),
+      });
       return { rows: [], rowCount: 1 };
+    }
+
+    if (sql.startsWith('SELECT id, invoice_id, event_type, event_data, created_at FROM payment_events')) {
+      const found = events
+        .filter((event) => event.invoiceId === params[0])
+        .map((event) => ({
+          id: event.id,
+          invoice_id: event.invoiceId,
+          event_type: event.eventType,
+          event_data: event.eventData,
+          created_at: event.createdAt,
+        }));
+      return { rows: found.map(clone), rowCount: found.length };
     }
 
     if (sql.startsWith('SELECT * FROM invoices WHERE id =')) {
@@ -350,6 +369,86 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       assert.equal(paidListed?.payerName, payerName);
       assert.equal(paidListed?.assetIssuer, USDC_ISSUER);
       assert.equal(paidListed?.sellerEmail, sellerEmail);
+    });
+
+    describe('seller payment-events feed (issue #515)', () => {
+      it('lists a rejected verify for the owning seller', async () => {
+        const invoice = await createInvoice();
+        transaction = {
+          transaction: { memo: 'someone-elses-memo' },
+          operations: [
+            {
+              type: 'payment',
+              from: PAYER,
+              to: SELLER_A,
+              amount: '42.5000000',
+              asset_type: 'native',
+            },
+          ],
+        };
+
+        const rejected = await call(
+          handlers().verifyPayment,
+          createReq({ params: { id: invoice.id }, body: { txHash: TX_HASH } })
+        );
+        assert.equal(rejected.statusCode, 400);
+
+        const res = await call(
+          handlers().getPaymentEvents,
+          createReq({ params: { id: invoice.id }, query: { sellerPublicKey: SELLER_A } })
+        );
+        assert.equal(res.statusCode, 200);
+        const reject = res.body.data.find((e: any) => e.eventType === 'PAYMENT_REJECTED');
+        assert.ok(reject, 'the rejected verify must land on the seller feed');
+        assert.equal(reject.eventData.code, 'MEMO_MISMATCH');
+        assert.equal(reject.eventData.txHash, TX_HASH);
+      });
+
+      it('refuses a foreign wallet with 403', async () => {
+        const invoice = await createInvoice();
+        const res = await call(
+          handlers().getPaymentEvents,
+          createReq({ params: { id: invoice.id }, query: { sellerPublicKey: SELLER_B } })
+        );
+        assert.equal(res.statusCode, 403);
+      });
+
+      it('requires a valid seller key — 400 when missing or malformed', async () => {
+        const invoice = await createInvoice();
+        const missing = await call(
+          handlers().getPaymentEvents,
+          createReq({ params: { id: invoice.id } })
+        );
+        assert.equal(missing.statusCode, 400);
+        const bad = await call(
+          handlers().getPaymentEvents,
+          createReq({ params: { id: invoice.id }, query: { sellerPublicKey: 'nope' } })
+        );
+        assert.equal(bad.statusCode, 400);
+      });
+
+      it('redacts identity-shaped keys from event payloads', async () => {
+        const invoice = await createInvoice();
+        await storage.logPaymentEvent!(invoice.id, 'PAYMENT_REJECTED', {
+          code: 'MEMO_MISMATCH',
+          txHash: TX_HASH,
+          memo: 'INV-RAW-MEMO-LEAK',
+          payerEmail: 'payer@wallet.example',
+          nested: { customerName: 'Client Co', amount: '42.5' },
+        });
+
+        const res = await call(
+          handlers().getPaymentEvents,
+          createReq({ params: { id: invoice.id }, query: { sellerPublicKey: SELLER_A } })
+        );
+        assert.equal(res.statusCode, 200);
+        const event = res.body.data[0];
+        assert.equal(event.eventData.code, 'MEMO_MISMATCH');
+        assert.equal(event.eventData.memo, undefined);
+        assert.equal(event.eventData.payerEmail, undefined);
+        assert.equal(event.eventData.nested.customerName, undefined);
+        assert.equal(event.eventData.nested.amount, '42.5');
+      });
     });
 
     it('creates an invoice scoped to the seller wallet', async () => {
@@ -707,6 +806,7 @@ describe('shared invoice router', () => {
       'GET /invoices/stats',
       'GET /invoices',
       'GET /invoices/:id',
+      'GET /invoices/:id/events',
       'GET /invoices/:id/payment-info',
       'POST /invoices/:id/cancel',
       'POST /invoices/:id/verify',

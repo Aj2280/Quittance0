@@ -87,6 +87,15 @@ export const invoiceApi = {
     return response.data;
   },
 
+  // Seller-only audit feed (issue #515): rejected verifies and monitor
+  // rejections for this invoice. Requires the invoice's own seller key.
+  getPaymentEvents: async (id: string, sellerPublicKey: string) => {
+    const response = await api.get(`/invoices/${id}/events`, {
+      params: { sellerPublicKey },
+    });
+    return response.data;
+  },
+
   cancel: async (id: string, sellerPublicKey?: string) => {
     const response = await api.post(`/invoices/${id}/cancel`, { sellerPublicKey });
     return response.data;

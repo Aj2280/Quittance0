@@ -40,6 +40,7 @@ import { createRequestId } from '../utils/request-correlation-id';
 import { checkInvoiceVerifyLimit } from '../middleware/rate-limit';
 import { cacheVerificationResult } from '../middleware/verify-cache';
 import { verifySellerSignature } from '../utils/signature-verification';
+import { redactPaymentEventData } from '../utils/payment-event-redaction';
 
 /** Kept explicit so clients can tune polling without duplicating backend policy. */
 export const PAYMENT_STATUS_POLL_INTERVAL_MS = 3000;
@@ -68,6 +69,7 @@ export interface InvoiceHandlerOptions {
 export interface InvoiceHandlers {
   createInvoice(req: Request, res: Response): Promise<void>;
   getInvoice(req: Request, res: Response): Promise<void>;
+  getPaymentEvents(req: Request, res: Response): Promise<void>;
   getInvoices(req: Request, res: Response): Promise<void>;
   getPaymentInfo(req: Request, res: Response): Promise<void>;
   cancelInvoice(req: Request, res: Response): Promise<void>;
@@ -221,6 +223,46 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
       } catch (error: any) {
         logError('Get invoices error:', error);
         sendFailure(res, 500, error.message || 'Failed to get invoices');
+      }
+    },
+
+    /**
+     * Seller-only audit feed for one invoice (issue #515). The workspace
+     * timeline otherwise shows status timestamps only — a rejected
+     * underpayment or foreign transaction never appears. The seller key
+     * scopes the read the same way the cancel proof does: present the
+     * invoice's own key or get nothing.
+     */
+    async getPaymentEvents(req: Request, res: Response) {
+      try {
+        const invoice = await storage.getInvoiceById(req.params.id);
+        if (!invoice) {
+          return sendFailure(res, 404, 'Invoice not found');
+        }
+
+        const sellerCheck = stellarPublicKeySchema.safeParse(req.query.sellerPublicKey);
+        if (!sellerCheck.success) {
+          return sendFailure(res, 400, 'sellerPublicKey query parameter is required and must be a valid Stellar public key');
+        }
+        if (sellerCheck.data !== invoice.sellerPublicKey) {
+          return sendFailure(res, 403, 'Forbidden: not the seller of this invoice');
+        }
+
+        const events = (await storage.getPaymentEvents?.(invoice.id)) ?? [];
+        sendSuccess(
+          res,
+          200,
+          events.map((event) => ({
+            id: event.id,
+            invoiceId: event.invoiceId,
+            eventType: event.eventType,
+            eventData: redactPaymentEventData(event.eventData),
+            createdAt: event.createdAt,
+          }))
+        );
+      } catch (error: any) {
+        logError('Get payment events error:', error);
+        sendFailure(res, 500, error.message || 'Failed to get payment events');
       }
     },
 
@@ -440,6 +482,20 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         if (!verification.ok) {
           // Cache verification failures to prevent repeated attempts
           await cacheVerificationResult(id, hashCheck.value, 'rejected', verification.code);
+          // Issue #515: a rejected verify lands on the seller's audit feed with
+          // the same taxonomy the monitor uses, so "still PENDING" answers
+          // itself without the payer having to say so.
+          await storage.logPaymentEvent?.(
+            id,
+            verification.code === 'AMOUNT_TOO_LOW' || verification.code === 'AMOUNT_MISMATCH'
+              ? 'PARTIAL_PAYMENT'
+              : 'PAYMENT_REJECTED',
+            {
+              code: verification.code,
+              txHash: hashCheck.value,
+              source: 'manual-verify',
+            }
+          ).catch(() => undefined);
           return sendVerificationFailure(res, 400, verification.code, verification.error);
         }
 
