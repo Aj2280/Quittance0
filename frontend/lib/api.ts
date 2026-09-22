@@ -87,8 +87,10 @@ export const invoiceApi = {
     return response.data;
   },
 
-  cancel: async (id: string, sellerPublicKey?: string) => {
-    const response = await api.post(`/invoices/${id}/cancel`, { sellerPublicKey });
+  // One proof path (issue #517): the seller key and the Freighter signature
+  // over `cancel:<id>` travel in the request body — never in query or header.
+  cancel: async (id: string, sellerPublicKey: string, signature?: string) => {
+    const response = await api.post(`/invoices/${id}/cancel`, { sellerPublicKey, signature });
     return response.data;
   },
 
