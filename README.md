@@ -51,7 +51,15 @@ Landing, dashboard, create, pay, and invoice-detail all use the same gate matrix
 install Freighter when the extension is missing, connect Freighter when no public
 key is available, switch networks when Freighter is not on
 `NEXT_PUBLIC_STELLAR_NETWORK`, and continue only when the wallet is connected on
-the expected network.
+the expected network. The network check is passphrase-strict: when Freighter
+reports a network passphrase it must equal the resolved network's passphrase
+exactly — a custom network may call itself `TESTNET` but cannot forge
+`Test SDF Network ; September 2015`. Wallets that report no passphrase fall
+back to the network-name comparison. `shared/network.ts` is the single
+resolver both deployments use: it maps the configured network to the
+passphrase, the default Horizon URL, and the explorer segment, and proof
+exports always claim the server's resolved network rather than a caller hint
+(a mismatched `?network=` query fails closed with 400).
 
 ### Create-form draft across a wallet disconnect
 
