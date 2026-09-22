@@ -8,6 +8,7 @@ import { PostgresInvoiceStorage } from '../src/storage/postgres-invoice-storage.
 import { InvoiceService } from '../src/services/invoice.service.ts';
 import memoryStorage from '../src/storage/memory-storage.ts';
 import type { InvoiceStorage } from '../src/storage/invoice-storage.ts';
+import { PUBLIC_INVOICE_FIELDS } from '../../shared/invoice.ts';
 
 const SELLER_A = 'GB3Q3VRHH3OQDYITTLONDLEHWQGKB27T2BEDSFHIUMOERULVXPDXRKG4';
 const SELLER_B = 'GB6IHEZ4QNOHJZRYRFLOC45P4SK3KKL6KNPI5WEG6FNVSZ2K5FS2MNY7';
@@ -303,7 +304,10 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       const lifetimeHours = (new Date(created.expiresAt).getTime() - new Date(created.createdAt).getTime()) / (60 * 60 * 1000);
       assert.ok(lifetimeHours >= 5 * 24 - 1, `5-day expiry window should be ~120h, got ${lifetimeHours}h`);
 
-      const got = await call(handlers().getInvoice, createReq({ params: { id: created.id } }));
+      const got = await call(
+        handlers().getInvoice,
+        createReq({ params: { id: created.id }, query: { sellerPublicKey: SELLER_A } })
+      );
       assert.equal(got.statusCode, 200);
       assert.equal(got.body.data.sellerName, sellerName);
       assert.equal(got.body.data.assetIssuer, USDC_ISSUER);
@@ -333,12 +337,19 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       );
 
       assert.equal(verified.statusCode, 200);
-      assert.equal(verified.body.data.payerName, payerName);
-      assert.equal(verified.body.data.payerEmail, payerEmail);
-      assert.equal(verified.body.data.payerPublicKey, PAYER);
       assert.equal(verified.body.data.paymentTxHash, TX_HASH);
       assert.ok(verified.body.data.paidAt, 'paidAt must be set after verify');
       assert.equal(verified.body.data.status, 'PAID');
+
+      // Payer identity is workspace-scoped (#503): the verify response is the
+      // public shape, so read the stored record back through the seller view.
+      const sellerView = await call(
+        handlers().getInvoice,
+        createReq({ params: { id: created.id }, query: { sellerPublicKey: SELLER_A } })
+      );
+      assert.equal(sellerView.body.data.payerName, payerName);
+      assert.equal(sellerView.body.data.payerEmail, payerEmail);
+      assert.equal(sellerView.body.data.payerPublicKey, PAYER);
 
       const listed = await call(
         handlers().getInvoices,
@@ -350,6 +361,136 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       assert.equal(paidListed?.payerName, payerName);
       assert.equal(paidListed?.assetIssuer, USDC_ISSUER);
       assert.equal(paidListed?.sellerEmail, sellerEmail);
+    });
+
+    describe('public pay DTO (issue #503)', () => {
+      const PII_KEYS = [
+        'customerName',
+        'customerEmail',
+        'sellerName',
+        'sellerEmail',
+        'payerPublicKey',
+        'payerName',
+        'payerEmail',
+        'description',
+        'metadata',
+        'userId',
+      ];
+
+      it('returns the public shape to an anonymous caller — no client or identity fields', async () => {
+        const created = await createInvoice({
+          customerName: 'Client Co',
+          customerEmail: 'pay@client.example',
+          sellerName: 'Studio',
+          sellerEmail: 'studio@example.com',
+          description: 'Invoice for design work',
+        });
+
+        const res = await call(
+          handlers().getInvoice,
+          createReq({ params: { id: created.id } })
+        );
+        assert.equal(res.statusCode, 200);
+        for (const key of PII_KEYS) {
+          assert.equal(res.body.data[key], undefined, `public DTO leaked ${key}`);
+        }
+        assert.equal(res.body.data.id, created.id);
+        assert.equal(res.body.data.sellerPublicKey, SELLER_A);
+        assert.equal(res.body.data.amount, 42.5);
+        assert.equal(res.body.data.memo, created.memo);
+        assert.equal(res.body.data.status, 'PENDING');
+        assert.ok(res.body.data.expiresAt, 'public DTO must keep expiresAt');
+        for (const key of Object.keys(res.body.data)) {
+          assert.ok(
+            PUBLIC_INVOICE_FIELDS.includes(key as any),
+            `public DTO carries non-whitelisted key ${key}`
+          );
+        }
+      });
+
+      it('returns the public shape to a foreign wallet', async () => {
+        const created = await createInvoice({ customerEmail: 'pay@client.example' });
+
+        const res = await call(
+          handlers().getInvoice,
+          createReq({ params: { id: created.id }, query: { sellerPublicKey: SELLER_B } })
+        );
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.data.customerEmail, undefined);
+        assert.equal(res.body.data.id, created.id);
+      });
+
+      it('returns the full workspace shape to the invoice seller', async () => {
+        const created = await createInvoice({
+          customerName: 'Client Co',
+          customerEmail: 'pay@client.example',
+        });
+
+        const res = await call(
+          handlers().getInvoice,
+          createReq({ params: { id: created.id }, query: { sellerPublicKey: SELLER_A } })
+        );
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.data.customerEmail, 'pay@client.example');
+        assert.equal(res.body.data.customerName, 'Client Co');
+      });
+
+      it('rejects a malformed sellerPublicKey hint with 400', async () => {
+        const created = await createInvoice();
+
+        const res = await call(
+          handlers().getInvoice,
+          createReq({ params: { id: created.id }, query: { sellerPublicKey: 'not-a-wallet' } })
+        );
+        assert.equal(res.statusCode, 400);
+      });
+
+      it('keeps the payment-info payload on the public shape', async () => {
+        const created = await createInvoice({
+          customerEmail: 'pay@client.example',
+          sellerEmail: 'studio@example.com',
+        });
+
+        const res = await call(
+          handlers().getPaymentInfo,
+          createReq({ params: { id: created.id } })
+        );
+        assert.equal(res.statusCode, 200);
+        for (const key of PII_KEYS) {
+          assert.equal(res.body.data.invoice[key], undefined, `payment-info leaked ${key}`);
+        }
+        assert.equal(res.body.data.invoice.memo, created.memo);
+      });
+
+      it('keeps the verify response on the public shape', async () => {
+        const created = await createInvoice({ customerEmail: 'pay@client.example' });
+        transaction = {
+          transaction: { memo: created.memo },
+          operations: [
+            {
+              type: 'payment',
+              from: PAYER,
+              to: SELLER_A,
+              amount: '42.5000000',
+              asset_type: 'native',
+            },
+          ],
+        };
+
+        const res = await call(
+          handlers().verifyPayment,
+          createReq({
+            params: { id: created.id },
+            body: { txHash: TX_HASH, payerEmail: 'percy@payer.example' },
+          })
+        );
+        assert.equal(res.statusCode, 200);
+        for (const key of PII_KEYS) {
+          assert.equal(res.body.data[key], undefined, `verify response leaked ${key}`);
+        }
+        assert.equal(res.body.data.status, 'PAID');
+        assert.equal(res.body.data.paymentTxHash, TX_HASH);
+      });
     });
 
     it('creates an invoice scoped to the seller wallet', async () => {
@@ -462,12 +603,12 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       assert.equal(res.body.message, 'Payment verified on Stellar');
       assert.equal(res.body.data.status, 'PAID');
       assert.equal(res.body.data.paymentTxHash, TX_HASH);
-      assert.equal(res.body.data.payerPublicKey, PAYER);
-      assert.equal(res.body.data.payerName, 'Ada');
-      assert.equal(res.body.data.payerEmail, 'ada@example.com');
 
       const stored = await storage.getInvoiceById(invoice.id);
       assert.equal(stored?.status, 'PAID');
+      assert.equal(stored?.payerPublicKey, PAYER);
+      assert.equal(stored?.payerName, 'Ada');
+      assert.equal(stored?.payerEmail, 'ada@example.com');
     });
 
     it('requires a transaction hash to verify', async () => {
