@@ -372,6 +372,20 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       assert.equal(res.body.data.paymentAvailable, true);
     });
 
+    it('builds a SEP-0007 QR for a one-stroop invoice amount', async () => {
+      // 0.0000001 arrives as the float 1e-7; the QR payload must be formatted
+      // through the stroop helper, not `toString()`, which emits '1e-7' and
+      // fails the SEP-0007 amount schema.
+      const res = await call(
+        handlers().createInvoice,
+        createReq({ body: invoiceBody({ amount: 0.0000001 }) })
+      );
+
+      assert.equal(res.statusCode, 201);
+      assert.equal(res.body.data.invoice.amount, 0.0000001);
+      assert.match(res.body.data.stellarQrCode, /^data:image\/png;base64,/);
+    });
+
     it('normalizes lowercase assetCode to uppercase on creation', async () => {
       const res = await call(
         handlers().createInvoice,

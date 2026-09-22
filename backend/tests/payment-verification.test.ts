@@ -96,6 +96,50 @@ describe('verifyHorizonPayment — happy path', () => {
     assert.equal(result.ok, true);
   });
 
+  it('accepts a one-stroop invoice paid as a Horizon string', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ amount: 0.0000001 }),
+        operations: [paymentOp({ amount: '0.0000001' })],
+      })
+    );
+
+    assert.equal(result.ok, true);
+  });
+
+  it('matches the Horizon string 10.0000000 against a stored 10', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ amount: 10 }),
+        operations: [paymentOp({ amount: '10.0000000' })],
+      })
+    );
+
+    assert.equal(result.ok, true);
+  });
+
+  it('accepts leading zeros in the Horizon amount string', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ amount: 42.5 }),
+        operations: [paymentOp({ amount: '0042.5000000' })],
+      })
+    );
+
+    assert.equal(result.ok, true);
+  });
+
+  it('rejects a one-stroop underpayment', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ amount: '10.0000000' }),
+        operations: [paymentOp({ amount: '9.9999999' })],
+      })
+    );
+
+    assert.equal(codeOf(result), 'AMOUNT_TOO_LOW');
+  });
+
   it('accepts a non-native asset when code and issuer both match', () => {
     const result = verifyHorizonPayment(
       input({

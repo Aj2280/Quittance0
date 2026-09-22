@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 import { shareInvoiceByEmail } from '@/lib/export';
 import { renderLandingBullets } from '@/lib/landing-feature-bullets';
 import { CREATED_INVOICE_ID, MAIN_CONTENT_ID, describeAmount } from '@/lib/a11y';
+import { canonicalAmount } from '@/lib/stroop-amount';
 
 export default function HomePage() {
   const [createdInvoice, setCreatedInvoice] = useState<any>(null);
@@ -237,7 +238,7 @@ export default function HomePage() {
                       title="Scan to pay"
                       size={180}
                       description={`a payment link for ${describeAmount(
-                        createdInvoice.invoice.amount,
+                        canonicalAmount(createdInvoice.invoice.amount) ?? createdInvoice.invoice.amount,
                         createdInvoice.invoice.assetCode
                       )}`}
                     />
@@ -256,7 +257,7 @@ export default function HomePage() {
                       decorative
                     />
                     <span className="font-display text-4xl" aria-hidden="true">
-                      {createdInvoice.invoice.amount}
+                      {canonicalAmount(createdInvoice.invoice.amount) ?? createdInvoice.invoice.amount}
                     </span>
                     <span className="text-[var(--teal)] font-medium" aria-hidden="true">
                       {createdInvoice.invoice.assetCode}
@@ -264,7 +265,7 @@ export default function HomePage() {
                     <span className="sr-only">
                       Amount:{' '}
                       {describeAmount(
-                        createdInvoice.invoice.amount,
+                        canonicalAmount(createdInvoice.invoice.amount) ?? createdInvoice.invoice.amount,
                         createdInvoice.invoice.assetCode
                       )}
                     </span>

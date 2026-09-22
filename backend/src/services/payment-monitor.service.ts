@@ -4,6 +4,7 @@ import invoiceService, { InvoiceService, Queryable } from './invoice.service';
 import { SELLER_PUBLIC_KEY, STELLAR_NETWORK } from '../config/stellar';
 import { pool } from '../config/database';
 import { checkInvoiceIsPayable, verifyHorizonPayment } from './payment-verification';
+import { canonicalAmount } from '../utils/safe-amount-compare';
 import { PaymentClaimError } from '../domain/payment-attribution';
 import {
   parseSettlementTime,
@@ -487,7 +488,7 @@ export class PaymentMonitorService {
         {
           code: verification.code,
           txHash: payment.txHash,
-          expectedAmount: typeof invoice.amount === 'number' ? invoice.amount.toFixed(7) : String(invoice.amount),
+          expectedAmount: canonicalAmount(invoice.amount) ?? String(invoice.amount),
           receivedAmount: payment.amount,
           payerPublicKey: payment.from,
         }

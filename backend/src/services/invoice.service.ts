@@ -10,6 +10,7 @@ import {
   type SettlementContext,
 } from '../domain/invoice-settlement';
 import type { MarkAsPaidOptions } from '../storage/invoice-storage';
+import { canonicalAmount } from '../utils/safe-amount-compare';
 
 // PostgreSQL invoice service. Kept behaviourally identical to
 // InvoiceMemoryService so callers that go through the shared InvoiceStorage
@@ -389,7 +390,7 @@ export class InvoiceService {
       sellerPublicKey: row.seller_public_key,
       sellerName: row.seller_name,
       sellerEmail: row.seller_email,
-      amount: parseFloat(row.amount),
+      amount: Number(canonicalAmount(row.amount) ?? 'NaN'),
       assetCode: row.asset_code,
       assetIssuer: row.asset_issuer,
       memo: row.memo,

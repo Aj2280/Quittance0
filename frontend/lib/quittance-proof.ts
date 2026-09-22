@@ -1,4 +1,5 @@
 import { buildHorizonTxUrl } from './explorer-tx-link.ts';
+import { canonicalAmount } from './stroop-amount.js';
 
 export const QUITTANCE_PROOF_VERSION = 'quittance.v1';
 
@@ -96,8 +97,9 @@ function utcIso(value: string | Date | null | undefined): string | null {
 
 function normalizeAmount(value: string | number | null | undefined): string | null {
   if (typeof value === 'number') {
-    if (!Number.isFinite(value) || value < 0) return null;
-    return normalizeAmount(value.toFixed(7));
+    // Stroop round-trip instead of toFixed: the proof prints exactly the
+    // amount the verifier compared, with no float formatting in between.
+    return canonicalAmount(value);
   }
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();

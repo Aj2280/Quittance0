@@ -46,9 +46,14 @@ describe('payment URI — what the formatter emits today', () => {
 });
 
 describe('payment URI — the gaps, proven against the SDK', () => {
-  it('emits an amount the SDK will not build a payment from', () => {
-    const result = formatQrPaymentPayload({ destination: VALID_DESTINATION, amount: '1.12345678' });
-    assert.match(result.uri, /amount=1\.12345678/);
+  it('refuses an amount the SDK would not build a payment from', () => {
+    // Formerly the eighth decimal was emitted anyway and the SDK refused it at
+    // payment-build time. The formatter now refuses first, so nothing beyond
+    // the compared stroops ever reaches a wallet.
+    assert.throws(
+      () => formatQrPaymentPayload({ destination: VALID_DESTINATION, amount: '1.12345678' }),
+      /at most 7 decimal places/
+    );
 
     assert.throws(
       () =>
@@ -58,7 +63,7 @@ describe('payment URI — the gaps, proven against the SDK', () => {
           amount: '1.12345678',
         }),
       /at most 7 digits after the decimal/,
-      'the ceiling is seven decimals; the URI carries eight'
+      'the ceiling is seven decimals; the SDK agrees'
     );
   });
 
@@ -105,7 +110,7 @@ describe('payment URI — the gaps, proven against the SDK', () => {
 
     assert.equal('asset_code' in result.params, false);
     assert.equal('asset_issuer' in result.params, false);
-    assert.equal(result.uri, `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25`);
+    assert.equal(result.uri, `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25.0000000`);
   });
 });
 
@@ -122,11 +127,10 @@ describe('payment URI — keeping the gap list honest', () => {
     }
   });
 
-  it('holds five gaps, so adding or closing one is a deliberate edit', () => {
+  it('holds four gaps, so adding or closing one is a deliberate edit', () => {
     assert.deepEqual(
       GAPS.map((c) => c.name),
       [
-        'an amount with eight decimals is emitted anyway',
         'a memo over 28 bytes is emitted anyway',
         'a non-ASCII memo over the byte ceiling is emitted anyway',
         'XLM with an issuer is silently downgraded to a native payment',

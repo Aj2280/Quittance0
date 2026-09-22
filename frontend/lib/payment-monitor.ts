@@ -4,6 +4,7 @@
  */
 
 import { server } from './stellar';
+import { canonicalAmount } from './stroop-amount.js';
 import { toast } from 'sonner';
 
 export interface PaymentNotification {
@@ -151,7 +152,7 @@ class PaymentMonitor {
    * Show notification for received payment
    */
   private showNotification(payment: PaymentNotification) {
-    const amount = parseFloat(payment.amount).toFixed(2);
+    const amount = canonicalAmount(payment.amount) ?? payment.amount;
     
     // Play notification sound (optional)
     if (typeof window !== 'undefined' && 'Notification' in window) {
