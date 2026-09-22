@@ -18,7 +18,10 @@ Checks run in a fixed order so every caller reports the same *first* failure:
    (`NETWORK_MISMATCH`)
 3. **Payment operation** — the transaction must contain one
    (`NO_PAYMENT_OPERATION`)
-4. **Memo** — must equal the invoice memo (`MEMO_MISMATCH`)
+4. **Memo** — the transaction must carry a *text* memo (or none): `hash`,
+   `id` and `return` memos are rejected outright as `MEMO_TYPE_MISMATCH`
+   rather than coerced into the comparison, and a text memo must then equal
+   the invoice memo (`MEMO_MISMATCH`)
 5. **Destination** — must be the seller's account (`DESTINATION_MISMATCH`)
 6. **Amount** — compared at Stellar's 7-decimal precision with no tolerance:
    less than the invoice is `AMOUNT_TOO_LOW`, more is `AMOUNT_TOO_HIGH`, and
