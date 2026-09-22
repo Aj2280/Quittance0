@@ -167,7 +167,7 @@ describe('wallet-scoped invoice endpoints', () => {
 
     const bob = (await call(handlers.getInvoices as any, createReq({ query: { sellerPublicKey: BOB } })))
       .body.data;
-    await storage.markAsPaid(bob[0].id, 'b'.repeat(64), CAROL);
+    await storage.markAsPaid(bob[0].id, 'b'.repeat(64), CAROL, undefined, { settledAt: new Date() });
 
     const paidForAlice = await call(
       handlers.getInvoices as any,

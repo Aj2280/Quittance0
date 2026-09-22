@@ -119,15 +119,16 @@ class MemoryStorage {
     const now = new Date();
     const invoice = this.invoices.get(id);
     if (!invoice || invoice.status === 'PAID') return undefined;
-    if (invoice.status === 'PENDING' && new Date(invoice.expiresAt).getTime() <= now.getTime()) {
+    if (
+      invoice.status !== 'PENDING' &&
+      invoice.status !== 'CANCELLED' &&
+      invoice.status !== 'EXPIRED'
+    ) {
       return undefined;
     }
-    if (invoice.status !== 'PENDING' && invoice.status !== 'CANCELLED') return undefined;
 
-    const settlement = settlementFieldsForInvoice(
-      invoice,
-      options.settledAt ?? (invoice.status === 'PENDING' ? now : undefined)
-    );
+    // Settlement time must come from the ledger close time; never invent one.
+    const settlement = settlementFieldsForInvoice(invoice, options.settledAt);
 
     // One transaction settles one invoice. The claim below reads and records in
     // the same synchronous step, so a second caller holding the same hash gets a

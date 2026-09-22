@@ -41,6 +41,9 @@ export async function getQuittanceProof(req: Request, res: Response): Promise<vo
         createdAt: invoice.createdAt,
         expiresAt: invoice.expiresAt,
         paidAt: invoice.paidAt,
+        settledAt: invoice.settledAt,
+        settlementContext: invoice.settlementContext,
+        latePaymentWarningCode: invoice.latePaymentWarningCode,
       },
       { network }
     );
@@ -98,6 +101,9 @@ export async function getQuittanceProofPDF(req: Request, res: Response): Promise
         createdAt: invoice.createdAt,
         expiresAt: invoice.expiresAt,
         paidAt: invoice.paidAt,
+        settledAt: invoice.settledAt,
+        settlementContext: invoice.settlementContext,
+        latePaymentWarningCode: invoice.latePaymentWarningCode,
       },
       { network }
     );

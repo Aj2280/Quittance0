@@ -407,7 +407,11 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         }
 
         const statusCheck = checkInvoiceIsPayable(invoice.status);
-        if (!statusCheck.ok && invoice.status !== 'CANCELLED') {
+        if (
+          !statusCheck.ok &&
+          invoice.status !== 'CANCELLED' &&
+          invoice.status !== 'EXPIRED'
+        ) {
           return sendVerificationFailure(res, 400, statusCheck.code, statusCheck.error);
         }
 
@@ -443,7 +447,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           return sendVerificationFailure(res, 400, verification.code, verification.error);
         }
 
-        if (invoice.status === 'CANCELLED' && !verification.value.settledAt) {
+        if (!verification.value.settledAt) {
           return sendVerificationFailure(
             res,
             503,
@@ -484,7 +488,12 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           // Re-read so that race still returns the public expiry contract.
           const latest = await storage.getInvoiceById(id);
           const latestStatus = latest && checkInvoiceIsPayable(latest.status);
-          if (latestStatus && !latestStatus.ok) {
+          if (
+            latestStatus &&
+            !latestStatus.ok &&
+            latest!.status !== 'CANCELLED' &&
+            latest!.status !== 'EXPIRED'
+          ) {
             return sendVerificationFailure(
               res,
               400,
@@ -560,7 +569,9 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           .toUpperCase()}`;
         const mockPayerKey = 'GXXXSIMULATEDPAYERXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
 
-        const updatedInvoice = await storage.markAsPaid(id, mockTxHash, mockPayerKey);
+        const updatedInvoice = await storage.markAsPaid(id, mockTxHash, mockPayerKey, undefined, {
+          settledAt: new Date(),
+        });
         options.paymentMonitor?.unregisterWatch(id);
 
         sendSuccess(res, 200, updatedInvoice, { message: 'Payment simulated successfully' });

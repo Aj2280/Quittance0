@@ -452,7 +452,7 @@ export class PaymentMonitorService {
     }
 
     const payable = checkInvoiceIsPayable(invoice.status);
-    if (!payable.ok && invoice.status !== 'CANCELLED') return;
+    if (!payable.ok && invoice.status !== 'CANCELLED' && invoice.status !== 'EXPIRED') return;
 
     const isNative = payment.assetCode === 'XLM' && !payment.assetIssuer;
     const verification = verifyHorizonPayment({
@@ -496,7 +496,7 @@ export class PaymentMonitorService {
     }
 
     const settledAt = parseSettlementTime(payment.createdAt) ?? verification.value.settledAt;
-    if (invoice.status === 'CANCELLED' && !settledAt) {
+    if (!settledAt) {
       throw new SettlementTimeUnavailableError();
     }
 

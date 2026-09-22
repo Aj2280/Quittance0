@@ -58,6 +58,8 @@ export interface QuittanceProof {
     status: 'verified' | 'unverified';
     method: 'memo-and-amount' | 'none';
     checkedAt: string | null;
+    settlementContext: 'ON_TIME' | 'AFTER_EXPIRY' | 'AFTER_CANCEL' | null;
+    latePaymentWarningCode: string | null;
   };
   document: {
     generatedAtUtc: string;
@@ -78,6 +80,9 @@ export interface QuittanceProofInput {
   expiresAt?: string | Date | null;
   createdAt?: string | Date | null;
   paidAt?: string | Date | null;
+  settledAt?: string | Date | null;
+  settlementContext?: string | null;
+  latePaymentWarningCode?: string | null;
 }
 
 export interface QuittanceProofOptions {
@@ -164,6 +169,7 @@ export function buildQuittanceProof(
   }
 
   const checkedAt = settled ? utcIso(input.paidAt) : null;
+  const ledgerSettledAt = settled ? utcIso(input.settledAt ?? input.paidAt) : null;
   const generatedAt = (options.now ?? new Date()).toISOString();
 
   const proof: QuittanceProof = {
@@ -173,7 +179,7 @@ export function buildQuittanceProof(
     status: (['PAID', 'PENDING', 'EXPIRED', 'CANCELLED'].includes(status) ? status : 'PENDING') as QuittanceProof['status'],
     issuedAt: utcIso(input.createdAt) ?? generatedAt,
     dueAt: utcIso(input.expiresAt) ?? generatedAt,
-    settledAt: settled ? checkedAt : null,
+    settledAt: settled ? ledgerSettledAt : null,
     seller,
     payer: typeof input.payerPublicKey === 'string' && input.payerPublicKey.trim() !== ''
       ? input.payerPublicKey.trim()
@@ -189,8 +195,26 @@ export function buildQuittanceProof(
       explorerUrl: txHash ? buildHorizonTxUrl(txHash, network) : null,
     },
     verification: settled
-      ? { status: 'verified', method: 'memo-and-amount', checkedAt }
-      : { status: 'unverified', method: 'none', checkedAt: null },
+      ? {
+          status: 'verified',
+          method: 'memo-and-amount',
+          checkedAt,
+          settlementContext:
+            input.settlementContext === 'AFTER_EXPIRY' || input.settlementContext === 'AFTER_CANCEL'
+              ? input.settlementContext
+              : 'ON_TIME',
+          latePaymentWarningCode:
+            typeof input.latePaymentWarningCode === 'string' && input.latePaymentWarningCode !== ''
+              ? input.latePaymentWarningCode
+              : null,
+        }
+      : {
+          status: 'unverified',
+          method: 'none',
+          checkedAt: null,
+          settlementContext: null,
+          latePaymentWarningCode: null,
+        },
     document: { generatedAtUtc: generatedAt, generatedBy: 'quittance-server' },
   };
 
