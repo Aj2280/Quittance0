@@ -92,6 +92,11 @@ export function stateForStatus(statusOrInvoice: string | PayInvoice, now?: strin
 export function initialPaymentState(invoice?: PayInvoice | null): PaymentState;
 export function paymentReducer(state: PaymentState, event: PaymentEvent): PaymentState;
 export function shouldPoll(state: PaymentState): boolean;
+export function shouldDropPendingPayment(
+  previousSession?: WalletGateSession | null,
+  nextSession?: WalletGateSession | null,
+  status?: PayStatus | string
+): boolean;
 export function normalizePayerDetails(details?: PayerDetails): PayerDetailsResult;
 export function describeVerifyError(error: unknown, fallback?: string): string;
 export function isLikelyTransactionHash(value?: string | null): boolean;

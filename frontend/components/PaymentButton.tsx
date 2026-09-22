@@ -8,6 +8,7 @@ import {
   requestWalletAccess,
   getFreighterNetwork,
   isWrongNetwork,
+  readFreighterSession,
   NETWORK_DISPLAY_NAME,
 } from '@/lib/stellar';
 import { toast } from 'sonner';
@@ -91,6 +92,21 @@ export default function PaymentButton({
     setLoading(true);
     onStart?.();
 
+    // The whole attempt is bound to the key that started it (issue #508). If
+    // the wallet underneath changes while Freighter is open or the verify
+    // request is in flight, the result belongs to the previous session and
+    // must not be attributed to the new one.
+    const sessionPublicKey = publicKey;
+    const sessionLost = () => useWalletStore.getState().publicKey !== sessionPublicKey;
+    const reportSessionLost = () => {
+      // No onError dispatch: the page already reset the session for the new
+      // key, and an error written into it would belong to the previous one.
+      toast.warning('Wallet changed during payment', {
+        id: PAY_TOAST_ID,
+        description: 'The previous wallet submitted the transaction. Reconnect it to verify here.',
+      });
+    };
+
     try {
       const freighterInstalled = await checkWalletConnection();
       if (!freighterInstalled) {
@@ -118,6 +134,21 @@ export default function PaymentButton({
 
       toast.loading('Confirm in wallet...', { id: PAY_TOAST_ID });
       const txHash = await sendPayment(destination, amount, memo, assetCode, assetIssuer);
+
+      // A switch while the Freighter prompt was open means the signing key is
+      // no longer the connected session: the hash belongs to the previous
+      // wallet's session, so stop instead of reporting success — or pushing
+      // the previous session's payer details — under the new key. The live
+      // Freighter key is checked as well because the store can lag a switch
+      // the user made inside the wallet itself.
+      const liveSession = await readFreighterSession().catch(() => null);
+      const signerChanged = Boolean(
+        liveSession?.publicKey && liveSession.publicKey !== sessionPublicKey
+      );
+      if (sessionLost() || signerChanged) {
+        reportSessionLost();
+        return;
+      }
 
       if (invoiceId) {
         toast.loading('Verifying payment...', { id: PAY_TOAST_ID });
@@ -147,8 +178,22 @@ export default function PaymentButton({
         });
       }
 
+      // A switch during the in-flight verify belongs to the old session as
+      // well — the page must not record the hash under the new key.
+      if (sessionLost()) {
+        reportSessionLost();
+        return;
+      }
+
       onSuccess?.(txHash);
     } catch (error: any) {
+      // A failure thrown while the wallet underneath changed belongs to the
+      // old session — report the switch instead of an error the new key owns.
+      if (sessionLost()) {
+        reportSessionLost();
+        return;
+      }
+
       const missingTrustline =
         assetCode !== 'XLM' && (
           error.message?.toLowerCase().includes('trustline') ||
