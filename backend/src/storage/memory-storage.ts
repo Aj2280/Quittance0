@@ -4,6 +4,7 @@ import type { InvoiceStats } from './invoice-stats';
 import { isPendingInvoiceExpired } from '../domain/invoice-expiry';
 import { settlementFieldsForInvoice } from '../domain/invoice-settlement';
 import {
+  InvoiceIdCollisionError,
   MemoCollisionError,
   PaymentClaimError,
   PaymentClaimIndex,
@@ -52,6 +53,13 @@ class MemoryStorage {
     // the payment monitor. Refuse instead, and let creation draw another memo.
     if (this.invoicesByMemo.has(invoice.memo)) {
       throw new MemoCollisionError(invoice.memo);
+    }
+
+    // The id is the pay link (issue #512): a second invoice carrying an
+    // existing id would overwrite the first invoice's destination. Refuse,
+    // exactly like a memo collision.
+    if (this.invoices.has(invoice.id)) {
+      throw new InvoiceIdCollisionError(invoice.id);
     }
 
     this.invoices.set(invoice.id, invoice);
