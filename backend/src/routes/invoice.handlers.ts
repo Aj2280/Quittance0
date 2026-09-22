@@ -15,10 +15,12 @@ import {
 import { firstCreateInvoiceMessage } from '../../../shared/invoice-validation';
 import { generatePaymentQR, generateStellarPaymentQR } from '../utils/qrcode';
 import {
+  apiSuccess,
   sendFailure,
   sendSuccess,
   sendValidationFailure,
   sendVerificationFailure,
+  verificationFailureBody,
 } from '../types/api';
 import type { InvoiceStorage, StoredInvoice } from '../storage/invoice-storage';
 import { STELLAR_NETWORK } from '../config/stellar';
@@ -38,7 +40,11 @@ import {
 import { cutoverDrainMode, simulationAllowed } from '../config/runtime';
 import { createRequestId } from '../utils/request-correlation-id';
 import { checkInvoiceVerifyLimit } from '../middleware/rate-limit';
-import { cacheVerificationResult } from '../middleware/verify-cache';
+import {
+  verificationCache,
+  type VerificationCache,
+  type CachedVerificationBody,
+} from '../middleware/verify-cache';
 import { verifySellerSignature } from '../utils/signature-verification';
 
 /** Kept explicit so clients can tune polling without duplicating backend policy. */
@@ -63,6 +69,8 @@ export interface InvoiceHandlerOptions {
   stellar?: TransactionLookup;
   requireCancelSignature?: boolean;
   paymentMonitor?: PaymentMonitorWatchRegistry;
+  /** Shared with the route's cache middleware; tests inject a controllable one. */
+  verifyCache?: VerificationCache;
 }
 
 export interface InvoiceHandlers {
@@ -98,6 +106,16 @@ function toPositiveInt(value: unknown, fallback: number): number {
 export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHandlers {
   const { storage } = options;
   const stellar: TransactionLookup = options.stellar || stellarService;
+  const verifyCache = options.verifyCache ?? verificationCache;
+  const cacheResult = (
+    invoiceId: string,
+    txHash: string,
+    httpStatus: number,
+    body: CachedVerificationBody
+  ): Promise<void> =>
+    verifyCache
+      .set(invoiceId, txHash, httpStatus, body)
+      .catch(error => console.error('[VerifyCache] Failed to cache result:', error));
 
   const frontendUrl = () =>
     options.frontendUrl || process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -417,9 +435,13 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         } catch (error: any) {
           logError('Verify payment lookup error:', error);
           const notFound = failure('TRANSACTION_NOT_FOUND');
-          // Cache the rejection to prevent repeated Horizon lookups for invalid hashes
-          await cacheVerificationResult(id, hashCheck.value, 'rejected', notFound.code);
-          return sendVerificationFailure(res, 404, notFound.code, notFound.error);
+          // Cached with the short negative TTL: the hash may be ahead of
+          // Horizon indexing or the lookup may have failed transiently, and a
+          // long cache entry would turn a retry into a permanent block.
+          const body = verificationFailureBody(notFound.code, notFound.error);
+          await cacheResult(id, hashCheck.value, 404, body);
+          res.status(404).json(body);
+          return;
         }
 
         const verification = verifyHorizonPayment({
@@ -438,9 +460,12 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         });
 
         if (!verification.ok) {
-          // Cache verification failures to prevent repeated attempts
-          await cacheVerificationResult(id, hashCheck.value, 'rejected', verification.code);
-          return sendVerificationFailure(res, 400, verification.code, verification.error);
+          // Semantic rejections are permanent facts about the transaction —
+          // safe to replay for the full expiry window.
+          const body = verificationFailureBody(verification.code, verification.error);
+          await cacheResult(id, hashCheck.value, 400, body);
+          res.status(400).json(body);
+          return;
         }
 
         if (invoice.status === 'CANCELLED' && !verification.value.settledAt) {
@@ -462,15 +487,30 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
             { settledAt: verification.value.settledAt }
           );
           options.paymentMonitor?.unregisterWatch(id);
-          
-          // Cache successful verification
-          await cacheVerificationResult(id, hashCheck.value, 'verified');
+
+          // PAID is terminal — the cached success replays for the full window.
+          await cacheResult(
+            id,
+            hashCheck.value,
+            200,
+            apiSuccess(updatedInvoice, {
+              message: 'Payment verified on Stellar',
+              code: updatedInvoice.latePaymentWarningCode,
+              warning: updatedInvoice.latePaymentWarningCode
+                ? warningForLatePayment(updatedInvoice.latePaymentWarningCode)
+                : undefined,
+            })
+          );
         } catch (error) {
           if (error instanceof PaymentClaimError) {
             // A transaction that already settled another invoice must not settle
             // this one as well. 409, not 400: the request is well formed and it
-            // is the server's recorded state that refuses it.
-            return sendVerificationFailure(res, 409, error.code, messageForCode(error.code));
+            // is the server's recorded state that refuses it. The conflict is a
+            // stable fact about the tx hash, so it is safe to replay.
+            const body = verificationFailureBody(error.code, messageForCode(error.code));
+            await cacheResult(id, hashCheck.value, 409, body);
+            res.status(409).json(body);
+            return;
           }
           if (error instanceof SettlementTimeUnavailableError) {
             return sendVerificationFailure(

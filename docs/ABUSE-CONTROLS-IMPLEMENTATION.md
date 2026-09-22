@@ -42,9 +42,9 @@ All 8 ranked scenarios from `ABUSE-CONTROLS.md` have been addressed through a co
 **Fix**:
 - **Per-IP rate limit**: 30 verifications/min per IP
 - **Per-invoice rate limit**: 10 verifications/min per invoice (secondary check)
-- **Result caching**: Verified and rejected results cached for 72 hours
+- **Result caching**: verified results and semantic rejections cached for 72 hours; `TRANSACTION_NOT_FOUND` replies are cached for 60 seconds only, and transient service states (Horizon outage / rate limit / missing close time) are never cached
 - Cache hits return immediately without Horizon round trip
-- Failed transaction lookups (404) are cached to prevent repeated invalid hash submissions
+- Failed transaction lookups (404) are cached briefly to prevent repeated invalid hash submissions without permanently blocking a hash that is simply ahead of Horizon indexing
 
 **Files**:
 - `backend/src/middleware/rate-limit.ts` - Token bucket rate limiting
@@ -318,6 +318,9 @@ Use these to tune limits or identify attack patterns.
 - Horizon quota is the scarcest resource
 - Idempotent operation: Re-verifying the same (invoice, txHash) is safe
 - 72-hour TTL matches invoice expiry window
+- Entries are keyed by (invoice id, txHash), so a cached verdict can never cross invoices
+- A `TRANSACTION_NOT_FOUND` verdict expires after 60 seconds: the hash may be ahead of Horizon indexing or the lookup may have failed transiently, and a long negative entry would turn a retry into a permanent block
+- Transient states (`VERIFY_UNAVAILABLE`, `VERIFY_RATE_LIMIT_EXCEEDED`, `TRANSACTION_CLOSE_TIME_UNAVAILABLE`) are never stored, so an outage cannot become a lasting rejection
 
 ### Why 16 KB Body Limit?
 

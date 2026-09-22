@@ -8,11 +8,13 @@ import {
   verifyConcurrencyLock,
 } from '../middleware/rate-limit';
 import { createInvoiceCeilingMiddleware } from '../middleware/invoice-ceiling';
+import { createVerifyCacheMiddleware, verificationCache } from '../middleware/verify-cache';
 
 export interface InvoiceRouterOptions extends InvoiceHandlerOptions {
   enableRateLimiting?: boolean;
   enableConcurrencyLock?: boolean;
   enableCeilingCheck?: boolean;
+  enableVerifyCache?: boolean;
   invoiceCeiling?: number;
 }
 
@@ -99,12 +101,24 @@ export function createInvoiceRouter(options: InvoiceRouterOptions): Router {
   }
   router.post('/invoices/:id/cancel', ...cancelMiddlewares, handlers.cancelInvoice);
 
+  const enableVerifyCache =
+    options.enableVerifyCache ?? (process.env.DISABLE_VERIFY_CACHE !== 'true');
+
   const verifyMiddlewares: RequestHandler[] = [];
   if (enableConcurrencyLock) {
     verifyMiddlewares.push(verifyConcurrencyLock());
   }
   if (enableRateLimiting) {
     verifyMiddlewares.push(...createVerifyRateLimiters());
+  }
+  // Last in the chain: rate limiters still 429 a flood first, and a cache hit
+  // then replays the recorded verdict without another Horizon round trip. The
+  // middleware and the handler share one cache instance so a test override is
+  // honoured by both.
+  if (enableVerifyCache) {
+    verifyMiddlewares.push(
+      createVerifyCacheMiddleware(options.verifyCache ?? verificationCache)
+    );
   }
   router.post('/invoices/:id/verify', ...verifyMiddlewares, handlers.verifyPayment);
 
