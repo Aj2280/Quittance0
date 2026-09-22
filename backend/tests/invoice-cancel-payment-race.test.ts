@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 import type { Request, Response } from 'express';
 import { createInvoiceHandlers } from '../src/routes/invoice.handlers.ts';
+import { PaymentClaimError } from '../src/domain/payment-attribution.ts';
 import { InvoiceMemoryService } from '../src/services/invoice-memory.service.ts';
 import { InvoiceService } from '../src/services/invoice.service.ts';
 import type { Queryable } from '../src/services/invoice.service.ts';
@@ -172,7 +173,23 @@ class FakePostgresDb implements Queryable {
       return { rows: [{ ...row }], rowCount: 1 };
     }
 
+    if (sql.startsWith('SELECT id FROM invoices WHERE payment_tx_hash =')) {
+      const holder = this.rows.filter(row => row.payment_tx_hash === params[0]);
+      return { rows: holder.map(row => ({ ...row })), rowCount: holder.length };
+    }
+
     if (sql.startsWith("UPDATE invoices SET status = 'PAID'") || sql.startsWith('WITH settled AS')) {
+      // Durable claim lock: the partial unique index on payment_tx_hash
+      // refuses a second invoice claiming the same transaction (#501).
+      const claimed = this.rows.find(
+        candidate => candidate.payment_tx_hash === params[1] && candidate.id !== params[0]
+      );
+      if (claimed) {
+        const violation: any = new Error('duplicate key value violates unique constraint');
+        violation.code = '23505';
+        violation.constraint = 'uq_invoices_payment_tx_hash';
+        throw violation;
+      }
       const row = this.rows.find((candidate) => candidate.id === params[0]);
       const settledAt = params[5] ? new Date(params[5]) : new Date();
       const canSettle =
@@ -490,3 +507,68 @@ describe('cancel versus payment monitor attribution on memory storage', () => {
 
 runManualVerifySuite('in-memory storage', createMemoryStorage);
 runManualVerifySuite('postgres storage double', createPostgresStorage);
+
+// Issue #501: one transaction hash settles at most one invoice. The in-memory
+// engine enforces it through PaymentClaimIndex; the Postgres engine through the
+// partial unique index on payment_tx_hash, mapped to the same typed rejection.
+function runClaimLockSuite(name: string, createStorage: () => InvoiceStorage) {
+  describe(`one transaction settles one invoice on ${name}`, () => {
+    let storage: InvoiceStorage;
+
+    const createInvoice = () =>
+      storage.createInvoice({
+        sellerPublicKey: SELLER,
+        amount: 42.5,
+        assetCode: 'XLM',
+        description: 'Claim-lock race',
+      });
+
+    beforeEach(() => {
+      storage = createStorage();
+    });
+
+    it('rejects a second invoice claiming an already-settled transaction', async () => {
+      const first = await createInvoice();
+      const second = await createInvoice();
+      assert.notEqual(first.memo, second.memo);
+      const settledAt = new Date();
+
+      const settled = await storage.markAsPaid(first.id, TX_HASH, PAYER, undefined, {
+        settledAt,
+      });
+      assert.equal(settled.status, 'PAID');
+      assert.equal(settled.paymentTxHash, TX_HASH);
+
+      const rejection = await storage
+        .markAsPaid(second.id, TX_HASH, PAYER, undefined, { settledAt: new Date() })
+        .then(
+          () => null,
+          (error: unknown) => error
+        );
+      assert.ok(rejection instanceof PaymentClaimError, `expected PaymentClaimError, got ${rejection}`);
+      assert.equal(rejection.code, 'TX_HASH_ALREADY_USED');
+      assert.equal(rejection.txHash, TX_HASH);
+      assert.equal(rejection.settledInvoiceId, first.id);
+
+      const stored = await storage.getInvoiceById(second.id);
+      assert.equal(stored.status, 'PENDING');
+      assert.equal(stored.paymentTxHash ?? null, null);
+    });
+
+    it('lets two invoices settle two distinct transactions', async () => {
+      const first = await createInvoice();
+      const second = await createInvoice();
+      const settledAt = new Date();
+
+      await storage.markAsPaid(first.id, TX_HASH, PAYER, undefined, { settledAt });
+      const other = await storage.markAsPaid(second.id, TX_HASH_2, PAYER, undefined, {
+        settledAt: new Date(),
+      });
+      assert.equal(other.status, 'PAID');
+      assert.equal(other.paymentTxHash, TX_HASH_2);
+    });
+  });
+}
+
+runClaimLockSuite('in-memory storage', createMemoryStorage);
+runClaimLockSuite('postgres storage double', createPostgresStorage);

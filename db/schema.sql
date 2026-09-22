@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS invoices (
   metadata JSONB
 );
 
+-- One transaction settles at most one invoice (issue #501). The in-process
+-- claim index covers the memory MVP; this partial unique index is the durable
+-- form on Postgres, so a racing verify/monitor claim fails with 23505 instead
+-- of double-settling.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_payment_tx_hash
+  ON invoices (payment_tx_hash)
+  WHERE payment_tx_hash IS NOT NULL;
+
 -- Transactions Table
 CREATE TABLE IF NOT EXISTS transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -127,31 +127,33 @@ call, so a separate `verified_at` column would duplicate it. If a first-seen
 time ever needs to survive a restart independently of `paidAt`, that is the
 column to add, populated from the claim.
 
-## Uniqueness: what this does now, and what the database should do next
+## Uniqueness: in-process and durable
 
-**Memory MVP (this PR).** Both rules live in the process. Stated plainly as a
-ceiling: the claim index is lost on restart and is not shared between instances,
-so a second instance would not see another instance's claims. That is correct
-for the single-instance memory backend and is the reason the durable form
-belongs in Postgres.
+**Memory MVP.** The claim index lives in the process. Stated plainly as a
+ceiling: it is lost on restart and is not shared between instances, so a second
+instance would not see another instance's claims. That is correct for the
+single-instance memory backend and is the reason the durable form lives in
+Postgres.
 
-**Postgres (recommended, not in this PR).** `db/schema.sql` already indexes
-memo, but not uniquely, and `payment_tx_hash` carries no constraint at all:
+**Postgres.** `db/schema.sql` carries the durable form of the claim lock — the
+partial unique index below — and `InvoiceService.markAsPaid` maps a `23505`
+violation on `uq_invoices_payment_tx_hash` to `PaymentClaimError`, so the
+verification route answers `409 TX_HASH_ALREADY_USED` and the monitor logs the
+rejected claim, exactly as the in-memory claim index does:
 
 ```sql
--- replaces idx_invoices_memo, which becomes redundant
-CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_memo ON invoices (memo);
-
 CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_payment_tx_hash
   ON invoices (payment_tx_hash)
   WHERE payment_tx_hash IS NOT NULL;
 ```
 
-Why it is not in this PR: the Postgres path cannot be exercised by this
-repository's default test run (`npm run test:pg` needs a live database), and an
-unverified migration is worse than a documented one. Until it lands, the two
-backends differ on this rule — worth saying out loud rather than leaving to be
-discovered.
+Memo is already safe on Postgres: the column is declared `UNIQUE NOT NULL`, so
+a duplicate memo fails at INSERT. `idx_invoices_memo` is an additional lookup
+index on top of that constraint.
+
+One migration note: `CREATE UNIQUE INDEX IF NOT EXISTS` fails on existing data
+if two live rows already share a non-null `payment_tx_hash`. Clean up duplicates
+before applying the schema to a database that has history.
 
 ## Coverage
 
@@ -166,6 +168,9 @@ cd backend && node --import tsx --test tests/invoice-payment-loop.test.ts
   and memo uniqueness including the retry and its exhaustion.
 - `tests/invoice-payment-loop.test.ts` — the concurrent double-POST and a
   reused hash against a second invoice.
+- `tests/invoice-cancel-payment-race.test.ts` — the claim-lock suite runs the
+  same cross-invoice claim against both storage engines, including the fake
+  Postgres unique-index violation mapping to `PaymentClaimError`.
 
 **What the HTTP route cannot reach, and why it is tested elsewhere.** The
 conflict path needs both invoices to hold the same memo. Over HTTP the memo

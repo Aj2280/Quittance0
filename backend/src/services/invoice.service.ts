@@ -4,6 +4,7 @@ import { generateInvoiceMemo } from '../utils/memo';
 import { CreateInvoiceInput } from '../utils/validation';
 import type { InvoiceStats } from '../storage/invoice-stats';
 import { calculateInvoiceExpiry } from '../domain/invoice-expiry';
+import { PaymentClaimError } from '../domain/payment-attribution';
 import {
   SettlementTimeUnavailableError,
   type LatePaymentWarningCode,
@@ -217,6 +218,22 @@ export class InvoiceService {
     } catch (error: any) {
       if (error instanceof SettlementTimeUnavailableError) {
         throw error;
+      }
+      // Durable form of the payment claim lock (issue #501): the partial
+      // unique index on payment_tx_hash rejects a second settle with 23505,
+      // which maps to the same typed rejection the memory claim index raises.
+      if (error?.code === '23505' && error?.constraint === 'uq_invoices_payment_tx_hash') {
+        let holderId = 'unknown';
+        try {
+          const holder = await this.db.query(
+            'SELECT id FROM invoices WHERE payment_tx_hash = $1',
+            [txHash]
+          );
+          holderId = holder.rows[0]?.id ?? 'unknown';
+        } catch {
+          // The claim error matters more than naming the holder.
+        }
+        throw new PaymentClaimError(txHash, invoiceId, holderId);
       }
       console.error('Error marking invoice as paid:', error);
       throw new Error(`Failed to update invoice: ${error.message}`);
