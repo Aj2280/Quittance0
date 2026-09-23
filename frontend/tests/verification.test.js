@@ -97,6 +97,7 @@ test('covers every rejection code with a message', () => {
     'TRANSACTION_CLOSE_TIME_UNAVAILABLE',
     'NO_PAYMENT_OPERATION',
     'AMBIGUOUS_PAYMENT_OPERATION',
+    'MEMO_TYPE_MISMATCH',
     'MEMO_MISMATCH',
     'DESTINATION_MISMATCH',
     'AMOUNT_MISMATCH',

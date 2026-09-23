@@ -299,6 +299,16 @@ function normalizeMemo(memo: unknown): string {
   return typeof memo === 'string' ? memo : '';
 }
 
+/**
+ * Horizon reports `memo_type` as `none` | `text` | `id` | `hash` | `return`
+ * (JSON responses) or the SDK's `MEMO_*` spellings in some shapes. Anything
+ * unrecognised is returned lowercased so the caller can still fail closed.
+ */
+function normalizeMemoType(memoType: unknown): string | undefined {
+  if (typeof memoType !== 'string' || memoType === '') return undefined;
+  return memoType.toLowerCase().replace(/^memo_/, '');
+}
+
 export function transactionSettlementTime(transaction: HorizonTransactionLike): Date | undefined {
   return parseSettlementTime(transaction?.created_at) ?? undefined;
 }
@@ -358,6 +368,14 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
   }
 
   const paymentOp = selection.op;
+
+  // Invoice memos are Stellar text memos. A hash, id or return memo is never
+  // coerced into the string comparison: it is rejected outright so a payer
+  // cannot satisfy the memo check with bytes that were never text.
+  const txMemoType = normalizeMemoType(transaction?.memo_type);
+  if (txMemoType && txMemoType !== 'text' && txMemoType !== 'none') {
+    return failure('MEMO_TYPE_MISMATCH');
+  }
 
   if (normalizeMemo(transaction?.memo) !== normalizeMemo(expected.memo)) {
     return failure('MEMO_MISMATCH');
