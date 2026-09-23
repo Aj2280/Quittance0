@@ -17,6 +17,7 @@ import {
   wrongNetworkMessage,
 } from './freighter-availability';
 import { networkDisplayName } from './network-display-name';
+import { fitsStellarTextMemo } from '@shared/memo';
 
 // Network configuration
 export const STELLAR_NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'TESTNET';
@@ -368,6 +369,13 @@ export const sendPayment = async (
       !hasAssetTrustline(account, normalizedAssetCode, assetIssuer)
     ) {
       throw new Error(getTrustlineMessage(normalizedAssetCode));
+    }
+
+    // Invoice memos are Stellar text memos: refuse before building if the
+    // memo cannot fit, so the failure is the contract's message rather than
+    // the SDK's opaque `Memo.text` throw.
+    if (!fitsStellarTextMemo(memo)) {
+      throw new Error('Invoice memo exceeds the 28-byte Stellar text memo limit');
     }
 
     // Build transaction
