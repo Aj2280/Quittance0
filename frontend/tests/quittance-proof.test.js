@@ -106,6 +106,8 @@ test('keeps an unsettled invoice honest instead of rendering blank fields', () =
     status: 'unverified',
     method: 'none',
     checkedAt: null,
+    settlementContext: null,
+    latePaymentWarningCode: null,
   });
   assert.equal(proof.schemaVersion, QUITTANCE_PROOF_VERSION);
 });

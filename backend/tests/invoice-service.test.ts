@@ -61,13 +61,15 @@ class FakeInvoiceDb implements Queryable {
     }
 
     if (sql.startsWith("UPDATE invoices SET status = 'PAID'") || sql.startsWith('WITH settled AS')) {
-      const now = Date.now();
-      const settledAt = params[5] ? new Date(params[5]) : new Date();
+      const settledAt = params[5] ? new Date(params[5]) : null;
       const row = this.rows.find(
         candidate => candidate.id === params[0] &&
+          settledAt &&
+          Number.isFinite(settledAt.getTime()) &&
           (
-            (candidate.status === 'PENDING' && new Date(candidate.expires_at).getTime() > now) ||
-            (candidate.status === 'CANCELLED' && candidate.cancelled_at && Number.isFinite(settledAt.getTime()))
+            candidate.status === 'PENDING' ||
+            candidate.status === 'EXPIRED' ||
+            (candidate.status === 'CANCELLED' && candidate.cancelled_at)
           )
       );
       if (!row) {
@@ -77,6 +79,10 @@ class FakeInvoiceDb implements Queryable {
       const afterCancel =
         priorStatus === 'CANCELLED' &&
         settledAt.getTime() >= new Date(row.cancelled_at).getTime();
+      const expiresAt = row.expires_at ? new Date(row.expires_at) : null;
+      const afterExpiry = expiresAt
+        ? settledAt.getTime() >= expiresAt.getTime()
+        : priorStatus === 'EXPIRED';
       row.status = 'PAID';
       row.payment_tx_hash = params[1];
       row.payer_public_key = params[2];
@@ -84,9 +90,15 @@ class FakeInvoiceDb implements Queryable {
       row.payer_email = params[4];
       row.paid_at = new Date();
       row.settled_at = settledAt;
-      row.settlement_context = afterCancel ? 'AFTER_CANCEL' : 'ON_TIME';
-      row.prior_status = priorStatus === 'CANCELLED' ? 'CANCELLED' : null;
-      row.late_payment_warning_code = afterCancel ? 'PAYMENT_RECEIVED_AFTER_CANCEL' : null;
+      row.settlement_context =
+        priorStatus === 'CANCELLED'
+          ? afterCancel ? 'AFTER_CANCEL' : 'ON_TIME'
+          : afterExpiry ? 'AFTER_EXPIRY' : 'ON_TIME';
+      row.prior_status = priorStatus !== 'PENDING' || afterExpiry ? priorStatus : null;
+      row.late_payment_warning_code =
+        priorStatus === 'CANCELLED'
+          ? afterCancel ? 'PAYMENT_RECEIVED_AFTER_CANCEL' : null
+          : afterExpiry ? 'PAYMENT_RECEIVED_AFTER_EXPIRY' : null;
       return { rows: [{ ...row }], rowCount: 1 };
     }
 
@@ -331,7 +343,7 @@ describe('InvoiceService (Postgres) seller scoping', () => {
     const paid = await service.markAsPaid(created.id, txHash, PAYER, {
       payerName: 'Alan Turing',
       payerEmail: 'alan@bletchley.example',
-    });
+    }, { settledAt: new Date() });
 
     assert.equal(paid.status, 'PAID');
     assert.equal(paid.paymentTxHash, txHash);
@@ -348,19 +360,21 @@ describe('InvoiceService (Postgres) seller scoping', () => {
     assert.equal(raw.payer_email, 'alan@bletchley.example');
   });
 
-  it('markAsPaid refuses an invoice whose expiresAt has already passed', async () => {
+  it('markAsPaid settles an invoice whose expiresAt has already passed as AFTER_EXPIRY', async () => {
     const db = new FakeInvoiceDb();
     const service = new InvoiceService(db);
     const created = await service.createInvoice(input(SELLER_A, { expiresInDays: 1 }));
     db.rows[0].expires_at = new Date(Date.now() - 60_000);
+    await service.getInvoiceById(created.id);
 
-    await assert.rejects(
-      () => service.markAsPaid(created.id, 'e'.repeat(64), PAYER),
-      /Invoice not found, expired, or already processed/
-    );
+    const paid = await service.markAsPaid(created.id, 'e'.repeat(64), PAYER, undefined, {
+      settledAt: new Date(),
+    });
 
-    const fetched = await service.getInvoiceById(created.id);
-    assert.equal(fetched?.status, 'EXPIRED');
+    assert.equal(paid.status, 'PAID');
+    assert.equal(paid.settlementContext, 'AFTER_EXPIRY');
+    assert.equal(paid.priorStatus, 'EXPIRED');
+    assert.equal(paid.latePaymentWarningCode, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
   });
 
   it('cancelInvoice flips status to CANCELLED only when PENDING', async () => {

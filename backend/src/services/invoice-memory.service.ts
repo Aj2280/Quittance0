@@ -30,6 +30,19 @@ export class InvoiceMemoryService {
       throw new Error('Seller public key is required');
     }
 
+    // Issue #514: a replayed create (same Idempotency-Key, or the derived
+    // signature inside its window) returns the original invoice instead of
+    // minting a second memo and pay link.
+    if (input.idempotencyKey) {
+      const existing = this.storage.findByIdempotencyKey(
+        input.sellerPublicKey,
+        input.idempotencyKey
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
     const id = generatePublicInvoiceId();
     const memo = this.drawUnusedMemo();
     const expiresAt = calculateInvoiceExpiry(input.expiresInDays);
@@ -47,6 +60,7 @@ export class InvoiceMemoryService {
       customerName: input.customerName,
       customerEmail: input.customerEmail,
       expiresAt,
+      idempotencyKey: input.idempotencyKey,
     });
 
     console.log('✅ Invoice created:', invoice.id);
@@ -116,6 +130,22 @@ export class InvoiceMemoryService {
     }
 
     return invoices.slice(offset, offset + limit);
+  }
+
+  /**
+   * PENDING invoices due for monitor re-watch after a restart (issue #502).
+   * Seller-scoped when a key is given; otherwise all pending in MVP memory.
+   */
+  async listPendingInvoices(
+    sellerPublicKey?: string,
+    limit: number = 500
+  ): Promise<StoredInvoice[]> {
+    await this.markExpiredInvoices();
+    let invoices = this.storage.getAllInvoices({ status: 'PENDING' });
+    if (sellerPublicKey) {
+      invoices = invoices.filter((inv) => inv.sellerPublicKey === sellerPublicKey);
+    }
+    return invoices.slice(0, Math.max(1, limit));
   }
 
   async cancelInvoice(invoiceId: string, sellerPublicKey?: string): Promise<StoredInvoice> {

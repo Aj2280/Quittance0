@@ -13,6 +13,15 @@ const NETWORK_LABELS = Object.freeze({
   STANDALONE: 'Standalone',
 });
 
+// Passphrases mirrored from shared/network.ts — this plain-JS module is loaded
+// directly by node tests and cannot import the TS contract. A wallet-reported
+// network NAME can lie (a custom network may call itself "TESTNET"); the
+// passphrase cannot, so when Freighter reports it, it must match exactly.
+const NETWORK_PASSPHRASES = Object.freeze({
+  TESTNET: 'Test SDF Network ; September 2015',
+  PUBLIC: 'Public Global Stellar Network ; September 2015',
+});
+
 const normalizeFreighterBoolean = (value, key) => {
   if (typeof value === 'boolean') return value;
   if (value && typeof value === 'object') {
@@ -37,6 +46,19 @@ const networkMatches = (actual, expected) => {
   const normalizedActual = normalizeNetworkName(actual);
   const normalizedExpected = normalizeNetworkName(expected);
   return Boolean(normalizedActual && normalizedExpected && normalizedActual === normalizedExpected);
+};
+
+/**
+ * Gate check for the wallet session: when the session carries the passphrase
+ * Freighter reported, it must equal the expected network's passphrase exactly.
+ * Only when no passphrase was reported does the looser name check apply.
+ */
+const sessionNetworkMatches = (session, expected) => {
+  if (session && session.networkPassphrase) {
+    const expectedPassphrase = NETWORK_PASSPHRASES[normalizeNetworkName(expected)];
+    return Boolean(expectedPassphrase && session.networkPassphrase === expectedPassphrase);
+  }
+  return networkMatches(session && session.network, expected);
 };
 
 const wrongNetworkMessage = (expectedNetwork, actualNetwork) =>
@@ -109,7 +131,7 @@ const walletGate = (session, expectedNetwork = 'TESTNET') => {
     };
   }
 
-  if (!networkMatches(session.network, expectedNetwork)) {
+  if (!sessionNetworkMatches(session, expectedNetwork)) {
     return {
       status: 'wrong_network',
       ready: false,
@@ -137,6 +159,7 @@ module.exports = {
   isNetworkMatching,
   networkLabel,
   networkMatches,
+  sessionNetworkMatches,
   walletGate,
   wrongNetworkMessage,
 };

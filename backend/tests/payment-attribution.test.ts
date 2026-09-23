@@ -98,11 +98,11 @@ describe('one transaction settles one invoice', () => {
     const first = seed(storage, 'INV-FIRST');
     const second = seed(storage, 'INV-SECOND');
 
-    storage.markAsPaid(first.id, TX_A, SELLER);
+    storage.markAsPaid(first.id, TX_A, SELLER, undefined, { settledAt: new Date() });
     assert.equal(storage.getInvoiceById(first.id)?.status, 'PAID');
 
     assert.throws(
-      () => storage.markAsPaid(second.id, TX_A, SELLER),
+      () => storage.markAsPaid(second.id, TX_A, SELLER, undefined, { settledAt: new Date() }),
       (error: any) => {
         assert.ok(error instanceof PaymentClaimError, 'expected a PaymentClaimError');
         assert.equal(error.code, 'TX_HASH_ALREADY_USED');
@@ -138,7 +138,7 @@ describe('one transaction settles one invoice', () => {
   it('forgets claims when the store is cleared', () => {
     const storage = new MemoryStorage();
     const invoice = seed(storage, 'INV-CLEARED');
-    storage.markAsPaid(invoice.id, TX_A, SELLER);
+    storage.markAsPaid(invoice.id, TX_A, SELLER, undefined, { settledAt: new Date() });
 
     storage.clear();
     assert.equal(storage.getPaymentClaim(TX_A), undefined);

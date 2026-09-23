@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiErrorMessage, invoiceApi, isApiUnavailableError } from '@/lib/api';
 import { toast } from 'sonner';
 import { Loader2, AlertTriangle } from 'lucide-react';
@@ -47,6 +47,11 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
   // them, so both routes render in the same place.
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [expiresInDays, setExpiresInDays] = useState(initialDraft.expiresInDays ?? 7);
+  // One create intent per draft: retries after a timeout replay this key so the
+  // server returns the original invoice instead of minting a second pay link
+  // (issue #514). Rotated only after a confirmed create — a failed attempt must
+  // keep the key so the retry can find its original.
+  const idempotencyKeyRef = useRef<string>(crypto.randomUUID());
   const { isWrongNetwork } = useWalletStore();
 
   // Focus follows the refusal: a keyboard user who pressed Create should land
@@ -149,9 +154,11 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
         description: description || undefined,
         customerName: customerName.trim() || undefined,
         customerEmail: customerEmail.trim() || undefined,
+        idempotencyKey: idempotencyKeyRef.current,
       });
 
       toast.success('Invoice created');
+      idempotencyKeyRef.current = crypto.randomUUID();
       onSuccess?.(result.data);
       setAmount('');
       setAssetCode('XLM');

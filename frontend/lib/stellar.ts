@@ -4,6 +4,7 @@ import {
   isConnected,
   getPublicKey,
   signTransaction,
+  signBlob,
   isAllowed,
   setAllowed,
   getNetwork,
@@ -17,6 +18,13 @@ import {
   wrongNetworkMessage,
 } from './freighter-availability';
 import { networkDisplayName } from './network-display-name';
+import { fitsStellarTextMemo } from '@shared/memo';
+import {
+  defaultHorizonUrl,
+  passphraseFor,
+  resolveStellarNetwork,
+  walletNetworkMatches,
+} from '@shared/network';
 import {
   accountHasTrustline,
   classifyTrustlinePreflight,
@@ -24,18 +32,16 @@ import {
   type TrustlinePreflight,
 } from './trustline-preflight';
 
-// Network configuration
-export const STELLAR_NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'TESTNET';
+// Network configuration — one resolver for the whole app (issue #511):
+// NEXT_PUBLIC_STELLAR_NETWORK decides the passphrase Freighter must report,
+// the default Horizon URL, and the explorer segment links render. An
+// unrecognised value fails at load rather than silently picking a network.
+const RESOLVED_NETWORK = resolveStellarNetwork(process.env.NEXT_PUBLIC_STELLAR_NETWORK);
+export const STELLAR_NETWORK = RESOLVED_NETWORK;
 export const HORIZON_URL =
-  process.env.NEXT_PUBLIC_HORIZON_URL ||
-  (STELLAR_NETWORK === 'TESTNET'
-    ? 'https://horizon-testnet.stellar.org'
-    : 'https://horizon.stellar.org');
+  process.env.NEXT_PUBLIC_HORIZON_URL || defaultHorizonUrl(RESOLVED_NETWORK);
 
-export const NETWORK_PASSPHRASE =
-  STELLAR_NETWORK === 'TESTNET'
-    ? StellarSdk.Networks.TESTNET
-    : StellarSdk.Networks.PUBLIC;
+export const NETWORK_PASSPHRASE = passphraseFor(RESOLVED_NETWORK);
 
 export const NETWORK_DISPLAY_NAME = networkDisplayName(NETWORK_PASSPHRASE);
 export const EXPECTED_WALLET_NETWORK = STELLAR_NETWORK.toUpperCase();
@@ -254,7 +260,11 @@ export const assertFreighterReady = async (): Promise<FreighterSession> => {
   const session = await readFreighterSession();
   if (!session.freighterAvailable) throw new Error(FREIGHTER_REQUIRED_MESSAGE);
   if (!session.connected || !session.publicKey) throw new Error(FREIGHTER_CONNECT_REQUIRED_MESSAGE);
-  if (!networkMatches(session.network, EXPECTED_WALLET_NETWORK)) {
+  // Passphrase-first gate (issue #511): when Freighter reports the network
+  // passphrase it must equal the resolved one exactly — a custom network can
+  // call itself "TESTNET" but cannot forge the passphrase. Wallets that do
+  // not report a passphrase fall back to the name check.
+  if (!walletNetworkMatches(RESOLVED_NETWORK, session)) {
     throw new Error(wrongNetworkMessage(EXPECTED_WALLET_NETWORK, session.network));
   }
   return session;
@@ -403,6 +413,13 @@ export const sendPayment = async (
       throw new Error(getTrustlineMessage(normalizedAssetCode));
     }
 
+    // Invoice memos are Stellar text memos: refuse before building if the
+    // memo cannot fit, so the failure is the contract's message rather than
+    // the SDK's opaque `Memo.text` throw.
+    if (!fitsStellarTextMemo(memo)) {
+      throw new Error('Invoice memo exceeds the 28-byte Stellar text memo limit');
+    }
+
     // Build transaction
     const transaction = new StellarSdk.TransactionBuilder(account, {
       fee: StellarSdk.BASE_FEE,
@@ -498,6 +515,29 @@ export const streamPayments = (
     });
 
   return closeHandler;
+};
+
+/**
+ * The one seller-proof message for cancel (issue #517): the connected wallet
+ * signs exactly `cancel:<invoiceId>` — one canonical message on one canonical
+ * transport (the request body), so a stale query param or header cannot
+ * smuggle a different seller key past the gate.
+ */
+export const CANCEL_INVOICE_MESSAGE_PREFIX = 'cancel:';
+
+export const signInvoiceCancelMessage = async (
+  invoiceId: string
+): Promise<{ publicKey: string; signature: string }> => {
+  const session = await assertFreighterReady();
+  const message = `${CANCEL_INVOICE_MESSAGE_PREFIX}${invoiceId}`;
+  // ASCII-only message, so btoa is a safe UTF-8→base64 step here.
+  const signed = await signBlob(btoa(message), { accountToSign: session.publicKey! });
+  const signature = readResultString(signed as any, ['signedBlob', 'signature']) ||
+    (typeof signed === 'string' ? signed : null);
+  if (!signature) {
+    throw new Error('Freighter did not return a cancel signature');
+  }
+  return { publicKey: session.publicKey!, signature };
 };
 
 /**
