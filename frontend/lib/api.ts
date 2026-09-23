@@ -66,8 +66,13 @@ export const invoiceApi = {
     return response.data;
   },
 
-  getById: async (id: string) => {
-    const response = await api.get(`/invoices/${id}`);
+  getById: async (id: string, sellerPublicKey?: string | null) => {
+    // Workspace fields (client contact, payer identity) are only returned when
+    // the caller presents the invoice's own seller key — issue #503. The pay
+    // page calls this without a key and receives the public pay DTO.
+    const response = await api.get(`/invoices/${id}`, {
+      params: sellerPublicKey ? { sellerPublicKey } : undefined,
+    });
     return response.data;
   },
 

@@ -394,6 +394,14 @@ The dashboard sends the connected wallet on every call:
 `GET /api/invoices?sellerPublicKey=G...` and `GET /api/invoices/stats?sellerPublicKey=G...`
 both return `400` when the seller key is missing.
 
+`GET /api/invoices/:id` serves two shapes from one record (issue #503): anonymous
+callers — including the `/pay/:id` checkout page — receive the public pay DTO
+(amount, asset, memo, destination, status, expiry, payment fields only), while
+`GET /api/invoices/:id?sellerPublicKey=<the invoice's own seller key>` returns
+the full workspace record with client contact and payer identity. The same
+public shape is embedded in `GET /api/invoices/:id/payment-info` and returned
+by `POST /api/invoices/:id/verify`.
+
 ### 4) Tests
 
 ```bash

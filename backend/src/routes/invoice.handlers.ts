@@ -12,6 +12,7 @@ import {
   stellarPublicKeySchema,
 } from '../utils/validation';
 import { firstCreateInvoiceMessage } from '../../../shared/invoice-validation';
+import { toPublicInvoiceDto } from '../../../shared/invoice';
 import { generatePaymentQR, generateStellarPaymentQR } from '../utils/qrcode';
 import {
   sendFailure,
@@ -186,7 +187,23 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           return sendFailure(res, 404, 'Invoice not found');
         }
 
-        sendSuccess(res, 200, invoice);
+        // #503: two shapes from one record. The workspace (seller) fields —
+        // customer contact, seller profile, payer identity, settlement
+        // internals — only leave the server when the caller proves ownership
+        // by presenting the invoice's own seller key. Everyone else gets the
+        // public pay DTO.
+        const sellerKey = req.query.sellerPublicKey;
+        if (sellerKey !== undefined) {
+          const parsed = stellarPublicKeySchema.safeParse(sellerKey);
+          if (!parsed.success) {
+            return sendFailure(res, 400, 'sellerPublicKey must be a valid Stellar public key');
+          }
+          if (parsed.data === invoice.sellerPublicKey) {
+            return sendSuccess(res, 200, invoice);
+          }
+        }
+
+        sendSuccess(res, 200, toPublicInvoiceDto(invoice));
       } catch (error: any) {
         logError('Get invoice error:', error);
         sendFailure(res, 500, error.message || 'Failed to get invoice');
@@ -234,7 +251,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
 
         const payment = await buildPaymentPayload(invoice);
 
-        sendSuccess(res, 200, { ...payment, invoice });
+        sendSuccess(res, 200, { ...payment, invoice: toPublicInvoiceDto(invoice) });
       } catch (error: any) {
         logError('Get payment info error:', error);
         sendFailure(res, 500, error.message || 'Failed to get payment info');
@@ -479,7 +496,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           throw error;
         }
 
-        sendSuccess(res, 200, updatedInvoice, {
+        sendSuccess(res, 200, toPublicInvoiceDto(updatedInvoice), {
           message: 'Payment verified on Stellar',
           code: updatedInvoice.latePaymentWarningCode,
           warning: updatedInvoice.latePaymentWarningCode
@@ -547,7 +564,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         const updatedInvoice = await storage.markAsPaid(id, mockTxHash, mockPayerKey);
         options.paymentMonitor?.unregisterWatch(id);
 
-        sendSuccess(res, 200, updatedInvoice, { message: 'Payment simulated successfully' });
+        sendSuccess(res, 200, toPublicInvoiceDto(updatedInvoice), { message: 'Payment simulated successfully' });
       } catch (error: any) {
         logError('Simulate payment error:', error);
         sendFailure(res, 500, error.message || 'Failed to simulate payment');

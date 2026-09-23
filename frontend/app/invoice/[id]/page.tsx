@@ -62,11 +62,17 @@ export default function InvoiceDetailPage() {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Declared before loadInvoice so the loader can present it as the workspace
+  // credential — the seller-scoped GET returns contact fields only to the
+  // invoice's own wallet (issue #503). When the wallet connects or switches,
+  // the load effect re-runs and picks up the richer shape.
+  const activeWallet = userWallet || (connected ? storePublicKey : null);
+
   const loadInvoice = useCallback(async () => {
     setLoadError(null);
     try {
       const [invoiceResult, paymentResult] = await Promise.allSettled([
-        invoiceApi.getById(id),
+        invoiceApi.getById(id, activeWallet),
         invoiceApi.getPaymentInfo(id),
       ]);
 
@@ -85,7 +91,7 @@ export default function InvoiceDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, activeWallet]);
 
   useEffect(() => {
     void loadInvoice();
@@ -128,8 +134,6 @@ export default function InvoiceDetailPage() {
       toast.error('Could not copy the payment link — select it on the payment page instead');
     }
   };
-
-  const activeWallet = userWallet || (connected ? storePublicKey : null);
 
   const handleCancel = async () => {
     if (!window.confirm('Cancel this invoice?')) return;
