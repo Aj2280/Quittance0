@@ -1,8 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { apiErrorMessage, invoiceApi, isApiUnavailableError, PAYMENT_STATUS_POLL_INTERVAL_MS, resolveVerificationError } from './api';
 import { checkTxHash } from './verification';
+import { parsePayReturnSearch } from './pay-return';
+import { loadPaySession, savePaySession } from './pay-session';
 import {
   HORIZON_OUTAGE_MESSAGE,
   isHorizonOutageError,
@@ -28,7 +31,11 @@ export function usePaymentPage(id: string) {
   const [payerName, setPayerName] = useState('');
   const [payerEmail, setPayerEmail] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [resumeAvailable, setResumeAvailable] = useState(false);
   const generation = useRef(0);
+  // The return URL only matters at mount: a wallet handoff lands here once.
+  const searchParams = useSearchParams();
+  const [initialSearch] = useState(() => searchParams?.toString() ?? '');
   const walletSessionRef = useRef({ publicKey, network, connected });
 
   const load = useCallback(async () => {
@@ -65,11 +72,37 @@ export function usePaymentPage(id: string) {
     setLoading(true);
     setPaymentInfo(null);
     setTxHash('');
+    setResumeAvailable(false);
     dispatch({ type: 'INVOICE_LOADED', invoice: null });
+
+    // Wallet handoff return (issue #516): a same-origin /pay/[id]?tx=<hash>
+    // link resumes verification without a paste. Anything else — a foreign
+    // return_url, a malformed tx — is ignored by parsePayReturnSearch.
+    const returned = parsePayReturnSearch(
+      initialSearch,
+      typeof window !== 'undefined' ? window.location.origin : ''
+    );
+    if (returned.txHash) {
+      setTxHash(returned.txHash);
+      void load().then(() => verify(returned.txHash ?? undefined));
+      return () => {
+        generation.current += 1;
+      };
+    }
+
+    // No hash in the URL: offer the resumable session instead — the stored
+    // hash only applies to this invoice and is still pasted by the payer.
+    const session = loadPaySession();
+    if (session.invoiceId === id && session.txHash && checkTxHash(session.txHash).ok) {
+      setTxHash(session.txHash);
+      setResumeAvailable(true);
+    }
     void load();
     return () => {
       generation.current += 1;
     };
+    // verify reads only the override argument plus stable refs at mount, so
+    // the mount-time instance is the right one and is intentionally excluded.
   }, [id, load]);
 
   // A wallet switch or disconnect cancels the previous key's in-flight work
@@ -104,11 +137,14 @@ export function usePaymentPage(id: string) {
     return () => clearInterval(interval);
   }, [id, payment, paymentInfo?.statusPollingIntervalMs]);
 
-  const verify = async () => {
-    const checked = checkTxHash(txHash);
+  const verify = async (hashOverride?: string) => {
+    const checked = checkTxHash(hashOverride ?? txHash);
     if (!checked.ok) return toast.error(checked.error);
     const payer = normalizePayerDetails({ payerName, payerEmail });
     if (!payer.ok) return toast.error(payer.error);
+    // Persist the non-secret resume pair before the request: if the wallet
+    // handoff kills the tab mid-verify, the hash survives for the resume path.
+    savePaySession({ invoiceId: id, txHash: checked.value });
     dispatch({ type: 'VERIFY_STARTED' });
     const request = generation.current;
     const sessionKey = connected ? publicKey : null;
@@ -165,6 +201,7 @@ export function usePaymentPage(id: string) {
     setPayerEmail,
     verifying: payment.status === PAY_STATES.VERIFYING,
     monitoring: shouldPoll(payment),
+    resumeAvailable,
     dispatch,
     verify,
     reload: load,

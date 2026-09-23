@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Copy, Check, ExternalLink, Smartphone, Monitor, AlertCircle } from 'lucide-react';
 import { copyWithFeedback } from '@/lib/clipboard-feedback';
 import { buildSep0007PayUri } from '@/lib/mobile-detection';
+import { isAllowedPayReturnUrl } from '@/lib/pay-return';
 import { MOBILE_FALLBACK_COPY } from '@/lib/mobile-fallback-copy';
 import { toast } from 'sonner';
 
@@ -34,12 +35,19 @@ export default function MobilePaymentFallback({
 }: MobilePaymentFallbackProps) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
+  // Ask the wallet to return the payer to this same pay page after signing
+  // (SEP-0007 callback=url:...). The callback is only ever our own same-origin
+  // paymentUrl — a caller-supplied or foreign return target is never embedded.
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const callback = isAllowedPayReturnUrl(paymentUrl, origin) ? paymentUrl : undefined;
+
   const sep0007Uri = buildSep0007PayUri({
     destination,
     amount,
     assetCode,
     assetIssuer,
     memo,
+    callback,
   });
 
   const handleCopy = async (text: string, fieldName: string, label: string) => {

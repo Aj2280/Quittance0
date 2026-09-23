@@ -7,4 +7,5 @@ export const useRouter = () => ({
   refresh() {},
 });
 export const usePathname = () => '/';
-export const useSearchParams = () => new URLSearchParams();
+// `__PAY_PAGE_SEARCH__` lets tests simulate a wallet-handoff return URL.
+export const useSearchParams = () => new URLSearchParams(globalThis.__PAY_PAGE_SEARCH__ || '');

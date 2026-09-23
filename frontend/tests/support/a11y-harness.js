@@ -58,7 +58,7 @@ const ALIASES = {
 
 /** Everything the audit renders, re-exported from one entry point. */
 const ENTRY_SOURCE = `
-export { setResponse, resetResponses } from 'axios';
+export { setResponse, resetResponses, getCalls, resetCalls } from 'axios';
 export { useWalletStore } from '@/lib/store';
 export { default as HomePage } from '@/app/page';
 export { default as DashboardPage } from '@/app/dashboard/page';
@@ -81,14 +81,14 @@ let cachedBundle = null;
 function loadBundle() {
   if (cachedBundle) return cachedBundle;
 
-  // `stdin` keeps the entry virtual: a shared temp file raced whenever two
-  // test files built the bundle at the same time (issue #508 tests).
+  // `stdin` keeps the entry point in memory: two test processes bundling at
+  // the same time must not fight over a shared temp file.
   const result = esbuild.buildSync({
     stdin: {
       contents: ENTRY_SOURCE,
       resolveDir: ROOT,
-      loader: 'jsx',
       sourcefile: 'a11y-entry.jsx',
+      loader: 'jsx',
     },
     absWorkingDir: ROOT,
     bundle: true,
