@@ -51,7 +51,15 @@ Landing, dashboard, create, pay, and invoice-detail all use the same gate matrix
 install Freighter when the extension is missing, connect Freighter when no public
 key is available, switch networks when Freighter is not on
 `NEXT_PUBLIC_STELLAR_NETWORK`, and continue only when the wallet is connected on
-the expected network.
+the expected network. The network check is passphrase-strict: when Freighter
+reports a network passphrase it must equal the resolved network's passphrase
+exactly — a custom network may call itself `TESTNET` but cannot forge
+`Test SDF Network ; September 2015`. Wallets that report no passphrase fall
+back to the network-name comparison. `shared/network.ts` is the single
+resolver both deployments use: it maps the configured network to the
+passphrase, the default Horizon URL, and the explorer segment, and proof
+exports always claim the server's resolved network rather than a caller hint
+(a mismatched `?network=` query fails closed with 400).
 
 ### Create-form draft across a wallet disconnect
 
@@ -158,13 +166,76 @@ Quittance supports multi-asset invoicing across native XLM and credit assets suc
 ### Seller invoice management & cancellation
 
 Sellers manage their invoices from the dashboard and detail views:
-- **Cancel Pending Invoices**: Sellers can cancel any pending invoice before payment or expiration. Cancellation is strictly gated on wallet ownership: `POST /api/invoices/:id/cancel` verifies the request against the invoice's `sellerPublicKey` (returning `403 Forbidden` on a mismatch).
+- **Cancel Pending Invoices**: Sellers can cancel any pending invoice before payment or expiration. Cancellation uses one proof path (issue #517): the request body carries `sellerPublicKey` plus a Freighter signature over the canonical message `cancel:<invoiceId>` — the UI signs via `signBlob` before calling `POST /api/invoices/:id/cancel`. Query params and `x-seller-public-key` headers are not accepted as transports, and a value that disagrees with the body returns `400`. A foreign signer returns `403`; a missing or invalid signature returns `401`; only `PENDING` invoices can cancel. Signatures are mandatory in production (`NODE_ENV=production` or `REQUIRE_CANCEL_SIGNATURE=true`); local dev/tests keep the signature optional bypass.
 - **Copy Pay & Share Links**: Direct quick-copy actions with toast feedback for pay URLs and invoice IDs across dashboard cards and detail pages.
 - **Proof & Receipt Navigation**: One-click jump to verified PDF payment proof and transaction details for all `PAID` invoices.
 
 ---
 
-## Stack
+## Dual-backend server (Issue #452)
+
+`backend/src/server-dual.ts` is the unified server entrypoint that selects
+the storage backend via an environment variable. Both the in-memory MVP and
+PostgreSQL back the same handler code through the `InvoiceStorage` interface,
+so a bug fix or new feature in a handler applies to both backends at once.
+
+### Storage selection
+
+| `INVOICE_STORAGE` | `DATABASE_URL` present | Backend used |
+|---|---|---|
+| `memory` (explicit) | any | In-memory (no DB needed) |
+| `postgres` (explicit) | ✓ | PostgreSQL |
+| `postgres` (explicit) | ✗ | **Boot error** — fails immediately with a clear message |
+| (unset) | ✓ | PostgreSQL (implicit) |
+| (unset) | ✗ | In-memory (implicit default) |
+
+Memory is the safe default. Setting `INVOICE_STORAGE=postgres` without
+providing `DATABASE_URL` is always an error — the server never silently falls
+back to memory when Postgres was explicitly requested.
+
+### Start the dual-mode server
+
+```bash
+cd backend
+
+# In-memory (no database):
+npm run dev:dual
+
+# PostgreSQL (database required):
+INVOICE_STORAGE=postgres DATABASE_URL=postgresql://... npm run dev:dual
+
+# Or via .env:
+echo "INVOICE_STORAGE=postgres" >> .env
+echo "DATABASE_URL=postgresql://user:pass@localhost:5432/quittance" >> .env
+npm run dev:dual
+```
+
+### Postgres setup for the dual-mode server
+
+```bash
+cd backend
+npm run db:migrate   # applies db/schema.sql (idempotent, safe to re-run)
+npm run db:seed      # optional: two demo sellers for wallet-scoping visibility
+```
+
+### Run the dual-backend tests
+
+```bash
+cd backend
+npm run test:dual    # invoice-dual-backend, postgres-restart-persistence, cross-seller-isolation
+npm test             # full suite: all of the above + existing tests
+```
+
+### Return to memory-only mode
+
+Set `INVOICE_STORAGE=memory` in `backend/.env` and restart, or switch to the
+hardcoded MVP entrypoint (`npm run dev:mvp`). The PostgreSQL database is not
+modified; rows persist and reappear when you re-enable Postgres.
+
+See [Postgres persistence (optional)](#postgres-persistence-optional) for
+migration commands, test flags, and the full cutover procedure.
+
+---
 
 | Layer | Tech |
 |-------|------|
@@ -328,6 +399,14 @@ header (or `idempotencyKey` body field) and a replay returns the original
 invoice — same id, memo, and pay link — instead of minting a second one.
 Keyless retries are still safe: identical create intent from the same seller
 inside a 2-minute window collapses onto the original row.
+
+`GET /api/invoices/:id` serves two shapes from one record (issue #503): anonymous
+callers — including the `/pay/:id` checkout page — receive the public pay DTO
+(amount, asset, memo, destination, status, expiry, payment fields only), while
+`GET /api/invoices/:id?sellerPublicKey=<the invoice's own seller key>` returns
+the full workspace record with client contact and payer identity. The same
+public shape is embedded in `GET /api/invoices/:id/payment-info` and returned
+by `POST /api/invoices/:id/verify`.
 
 ### 4) Tests
 

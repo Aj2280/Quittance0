@@ -132,6 +132,22 @@ export class InvoiceMemoryService {
     return invoices.slice(offset, offset + limit);
   }
 
+  /**
+   * PENDING invoices due for monitor re-watch after a restart (issue #502).
+   * Seller-scoped when a key is given; otherwise all pending in MVP memory.
+   */
+  async listPendingInvoices(
+    sellerPublicKey?: string,
+    limit: number = 500
+  ): Promise<StoredInvoice[]> {
+    await this.markExpiredInvoices();
+    let invoices = this.storage.getAllInvoices({ status: 'PENDING' });
+    if (sellerPublicKey) {
+      invoices = invoices.filter((inv) => inv.sellerPublicKey === sellerPublicKey);
+    }
+    return invoices.slice(0, Math.max(1, limit));
+  }
+
   async cancelInvoice(invoiceId: string, sellerPublicKey?: string): Promise<StoredInvoice> {
     const updated = this.storage.cancelInvoice(invoiceId, sellerPublicKey);
     if (!updated) {

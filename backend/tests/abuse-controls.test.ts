@@ -169,15 +169,16 @@ describe('Abuse Controls Suite', () => {
         expiresAt: new Date(Date.now() + 86400000),
       });
 
-      const fakeSig = otherKeypair.sign(Buffer.from(created.id)).toString('base64');
+      const fakeSig = otherKeypair.sign(Buffer.from(`cancel:${created.id}`)).toString('base64');
       const res = await request(port, 'POST', `/api/invoices/${created.id}/cancel`, {
         sellerPublicKey: otherPublicKey,
         signature: fakeSig,
       });
 
-      assert.equal(res.status, 401);
+      // Issue #517: a signed request from a non-seller is forbidden, not
+      // unauthenticated — the signature was valid, the identity is foreign.
+      assert.equal(res.status, 403);
       assert.equal(res.body.success, false);
-      assert.equal(res.body.code, 'UNAUTHORIZED');
 
       const check = await invoiceStorage.getInvoiceById(created.id);
       assert.equal(check?.status, 'PENDING');
@@ -239,7 +240,9 @@ describe('Abuse Controls Suite', () => {
         expiresAt: new Date(Date.now() + 86400000),
       });
 
-      const validSig = sellerKeypair.sign(Buffer.from(created.id)).toString('base64');
+      const validSig = sellerKeypair
+        .sign(Buffer.from(`cancel:${created.id}`))
+        .toString('base64');
       const res = await request(port, 'POST', `/api/invoices/${created.id}/cancel`, {
         sellerPublicKey,
         signature: validSig,

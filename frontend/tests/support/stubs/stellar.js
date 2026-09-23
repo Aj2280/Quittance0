@@ -5,8 +5,9 @@
  * bundle for code that never runs in this audit — nothing here submits a
  * transaction. Stubbing it keeps the suite to a couple of seconds.
  */
-export const server = { payments: () => ({ forAccount: () => ({ cursor: () => ({ stream: () => () => {} }) }) }) };
+export const server = { payments: () => ({ forAccount: () => ({ cursor: () => ({ stream: () => () => {} }) }) }), submitTransaction: async () => ({ hash: 'a'.repeat(64) }) };
 export const EXPECTED_WALLET_NETWORK = 'TESTNET';
+export const NETWORK_PASSPHRASE = 'Test SDF Network ; September 2015';
 export const NETWORK_DISPLAY_NAME = 'Testnet';
 export const checkWalletConnection = async () => false;
 export const requestWalletAccess = async () => false;
@@ -22,6 +23,23 @@ export const readFreighterSession = async () => ({
 export const stopFreighterWalletWatcher = () => () => {};
 export const getAccountBalance = async () => [];
 export const sendPayment = async () => '';
+export const loadAccount = async () => ({
+  id: 'STUB',
+  balances: [
+    { asset_type: 'native', balance: '100.0000000' },
+    { asset_type: 'credit_alphanum4', asset_code: 'USDC', asset_issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5', balance: '50.0000000' },
+  ],
+});
+export const assertFreighterReady = async () => ({
+  freighterAvailable: true,
+  connected: true,
+  publicKey: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+  network: 'TESTNET',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+});
+export const isValidPublicKey = (pk) => {
+  try { return typeof pk === 'string' && /^G[A-Z2-7]{55}$/.test(pk); } catch { return false; }
+};
 export const getExplorerTransactionUrl = (txHash) =>
   `https://stellar.expert/explorer/testnet/tx/${txHash}`;
 export const getExplorerAccountUrl = (publicKey) =>
@@ -32,6 +50,11 @@ export const isWrongNetwork = () => false;
 export const watchFreighterNetwork = () => () => {};
 export const STELLAR_NETWORK = 'TESTNET';
 export const STELLAR_PASSPHRASE = 'Test SDF Network ; September 2015';
+export const CANCEL_INVOICE_MESSAGE_PREFIX = 'cancel:';
+export const signInvoiceCancelMessage = async (invoiceId) => ({
+  publicKey: null,
+  signature: null,
+});
 
 const stellarExports = {
   server,
@@ -40,6 +63,9 @@ const stellarExports = {
   getUserPublicKey,
   getAccountBalance,
   sendPayment,
+  loadAccount,
+  assertFreighterReady,
+  isValidPublicKey,
   getExplorerTransactionUrl,
   describeStellarNetworkError,
   getFreighterNetwork,
@@ -47,7 +73,11 @@ const stellarExports = {
   watchFreighterNetwork,
   STELLAR_NETWORK,
   STELLAR_PASSPHRASE,
+  NETWORK_PASSPHRASE,
   NETWORK_DISPLAY_NAME,
+  CANCEL_INVOICE_MESSAGE_PREFIX,
+  signInvoiceCancelMessage,
+  EXPECTED_WALLET_NETWORK,
 };
 
 export default stellarExports;
