@@ -214,7 +214,7 @@ describe('Cutover Export, Validation, and Transactional Import Engine', () => {
       memo: 'MEMO-CLEAN-2',
     });
 
-    await memory.markAsPaid(inv1.id, VALID_TX_HASH, PAYER);
+    await memory.markAsPaid(inv1.id, VALID_TX_HASH, PAYER, undefined, { settledAt: new Date() });
 
     const snapshot = exportMemorySnapshot(memory);
     const importResult = await importSnapshotToPostgres(fakeDb, snapshot);

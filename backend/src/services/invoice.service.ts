@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { InvoiceIdCollisionError, MemoCollisionError } from '../domain/payment-attribution';
 import { pool } from '../config/database';
 import { generateInvoiceMemo } from '../utils/memo';
 import { CreateInvoiceInput } from '../utils/validation';
@@ -9,7 +10,7 @@ import {
   type LatePaymentWarningCode,
   type SettlementContext,
 } from '../domain/invoice-settlement';
-import type { MarkAsPaidOptions } from '../storage/invoice-storage';
+import type { MarkAsPaidOptions, PaymentEventRecord } from '../storage/invoice-storage';
 import { canonicalAmount } from '../utils/safe-amount-compare';
 
 // PostgreSQL invoice service. Kept behaviourally identical to
@@ -66,43 +67,76 @@ export class InvoiceService {
       throw new Error('Seller public key is required');
     }
 
-    const id = uuidv4();
     const memo = generateInvoiceMemo();
     const expiresAt = calculateInvoiceExpiry(input.expiresInDays);
 
+    // Issue #514: the idempotency key rides a partial unique index on
+    // (seller_public_key, idempotency_key), so a racing replay hits the
+    // conflict arbiter instead of inserting a second row. DO NOTHING then
+    // re-select returns the original invoice — same id, same memo.
     const query = `
       INSERT INTO invoices (
         id, seller_public_key, seller_name, seller_email, amount,
         asset_code, asset_issuer, memo, description, customer_name,
-        customer_email, status, expires_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        customer_email, status, expires_at, idempotency_key
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      ON CONFLICT (seller_public_key, idempotency_key) WHERE idempotency_key IS NOT NULL
+      DO NOTHING
       RETURNING *
     `;
 
-    const values = [
-      id,
-      input.sellerPublicKey,
-      input.sellerName || null,
-      input.sellerEmail || null,
-      input.amount,
-      (input.assetCode || 'XLM').toUpperCase(),
-      input.assetIssuer || null,
-      memo,
-      input.description || null,
-      input.customerName || null,
-      input.customerEmail || null,
-      'PENDING',
-      expiresAt,
-    ];
+    // The public id is the pay link itself (issue #512): a collision must fail
+    // the insert, not overwrite another invoice's destination. UUIDv4 makes a
+    // repeat vanishingly rare, but the constraint is the only thing that makes
+    // "unguessable" also "unique", so draw again once and refuse after that.
+    // `memo` is also unique — a memo 23505 is reported as such, not as an id
+    // collision. An idempotent replay returns the original row instead.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const id = uuidv4();
+      const values = [
+        id,
+        input.sellerPublicKey,
+        input.sellerName || null,
+        input.sellerEmail || null,
+        input.amount,
+        (input.assetCode || 'XLM').toUpperCase(),
+        input.assetIssuer || null,
+        memo,
+        input.description || null,
+        input.customerName || null,
+        input.customerEmail || null,
+        'PENDING',
+        expiresAt,
+        input.idempotencyKey || null,
+      ];
 
-    try {
-      const result = await this.db.query(query, values);
-      console.log('✅ Invoice created:', result.rows[0].id);
-      return this.mapRowToInvoice(result.rows[0]);
-    } catch (error: any) {
-      console.error('Error creating invoice:', error);
-      throw new Error(`Failed to create invoice: ${error.message}`);
+      try {
+        const result = await this.db.query(query, values);
+        if (result.rows.length === 0) {
+          const existing = await this.db.query(
+            'SELECT * FROM invoices WHERE seller_public_key = $1 AND idempotency_key = $2',
+            [input.sellerPublicKey, input.idempotencyKey]
+          );
+          if (existing.rows.length === 0) {
+            throw new Error('Idempotent replay lookup found no original invoice');
+          }
+          return this.mapRowToInvoice(existing.rows[0]);
+        }
+        console.log('✅ Invoice created:', result.rows[0].id);
+        return this.mapRowToInvoice(result.rows[0]);
+      } catch (error: any) {
+        if (error?.code === '23505') {
+          const onId = !error.constraint || /pkey|id/i.test(String(error.constraint));
+          if (!onId) throw new MemoCollisionError(memo);
+          if (attempt === 0) continue;
+          throw new InvoiceIdCollisionError(id);
+        }
+        console.error('Error creating invoice:', error);
+        throw new Error(`Failed to create invoice: ${error.message}`);
+      }
     }
+
+    throw new InvoiceIdCollisionError('unreachable');
   }
 
   /**
@@ -155,23 +189,27 @@ export class InvoiceService {
             paid_at = NOW(),
             payer_name = $4,
             payer_email = $5,
-            settled_at = COALESCE($6::timestamptz, NOW()),
+            settled_at = $6::timestamptz,
             settlement_context = CASE
               WHEN status = 'CANCELLED' AND $6::timestamptz >= cancelled_at THEN 'AFTER_CANCEL'
+              WHEN status = 'CANCELLED' THEN 'ON_TIME'
+              WHEN COALESCE($6::timestamptz >= expires_at, status = 'EXPIRED') THEN 'AFTER_EXPIRY'
               ELSE 'ON_TIME'
             END,
             prior_status = CASE
-              WHEN status = 'CANCELLED' THEN status
+              WHEN status <> 'PENDING' OR COALESCE($6::timestamptz >= expires_at, false) THEN status
               ELSE NULL
             END,
             late_payment_warning_code = CASE
               WHEN status = 'CANCELLED' AND $6::timestamptz >= cancelled_at THEN 'PAYMENT_RECEIVED_AFTER_CANCEL'
+              WHEN status <> 'CANCELLED' AND COALESCE($6::timestamptz >= expires_at, status = 'EXPIRED') THEN 'PAYMENT_RECEIVED_AFTER_EXPIRY'
               ELSE NULL
             END
         WHERE id = $1
+          AND $6::timestamptz IS NOT NULL
           AND (
-            (status = 'PENDING' AND expires_at > NOW())
-            OR (status = 'CANCELLED' AND cancelled_at IS NOT NULL AND $6::timestamptz IS NOT NULL)
+            status IN ('PENDING', 'EXPIRED')
+            OR (status = 'CANCELLED' AND cancelled_at IS NOT NULL)
           )
         RETURNING *
       ),
@@ -186,7 +224,8 @@ export class InvoiceService {
             'settledAt', settled_at,
             'settlementContext', settlement_context,
             'priorStatus', prior_status,
-            'latePaymentWarningCode', late_payment_warning_code
+            'latePaymentWarningCode', late_payment_warning_code,
+            'destinationMuxedId', $7::text
           ))
         FROM settled
         RETURNING id
@@ -202,11 +241,12 @@ export class InvoiceService {
         payerInfo?.payerName || null,
         payerInfo?.payerEmail || null,
         settledAt,
+        options?.destinationMuxedId ?? null,
       ]);
 
       if (result.rows.length === 0) {
         const existing = await this.db.query('SELECT * FROM invoices WHERE id = $1', [invoiceId]);
-        if (existing.rows[0]?.status === 'CANCELLED' && !settledAt) {
+        if (existing.rows.length > 0 && !settledAt) {
           throw new SettlementTimeUnavailableError();
         }
         throw new Error('Invoice not found, expired, or already processed');
@@ -249,6 +289,30 @@ export class InvoiceService {
 
     query += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
     params.push(limit, offset);
+
+    const result = await this.db.query(query, params);
+    return result.rows.map((row) => this.mapRowToInvoice(row));
+  }
+
+  /**
+   * PENDING invoices due for monitor re-watch after a restart (issue #502).
+   * Scoped to the seller when given; always bounded. Expired rows are lazily
+   * transitioned first so they never come back as watches.
+   */
+  async listPendingInvoices(
+    sellerPublicKey?: string,
+    limit: number = 500
+  ): Promise<Invoice[]> {
+    await this.markExpiredInvoices();
+
+    const params: any[] = [];
+    let query = "SELECT * FROM invoices WHERE status = 'PENDING'";
+    if (sellerPublicKey) {
+      params.push(sellerPublicKey);
+      query += ` AND seller_public_key = $${params.length}`;
+    }
+    params.push(Math.max(1, limit));
+    query += ` ORDER BY created_at ASC LIMIT $${params.length}`;
 
     const result = await this.db.query(query, params);
     return result.rows.map((row) => this.mapRowToInvoice(row));
@@ -300,6 +364,27 @@ export class InvoiceService {
     const result = await this.db.query(query, [now]);
     console.log(`⏰ Marked ${result.rowCount} invoices as expired`);
     return result.rowCount || 0;
+  }
+
+  /**
+   * Read the payment_events audit feed for one invoice, oldest first
+   * (issue #515). Callers authorize before exposing rows.
+   */
+  async getPaymentEvents(invoiceId: string): Promise<PaymentEventRecord[]> {
+    const query = `
+      SELECT id, invoice_id, event_type, event_data, created_at
+      FROM payment_events
+      WHERE invoice_id = $1
+      ORDER BY created_at ASC, id ASC
+    `;
+    const result = await this.db.query(query, [invoiceId]);
+    return result.rows.map((row: any) => ({
+      id: row.id,
+      invoiceId: row.invoice_id,
+      eventType: row.event_type,
+      eventData: row.event_data ?? null,
+      createdAt: row.created_at,
+    }));
   }
 
   /**
@@ -411,6 +496,7 @@ export class InvoiceService {
       latePaymentWarningCode: row.late_payment_warning_code,
       expiresAt: row.expires_at,
       metadata: row.metadata,
+      idempotencyKey: row.idempotency_key ?? undefined,
     };
   }
 

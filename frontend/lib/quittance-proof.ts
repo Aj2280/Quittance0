@@ -49,6 +49,8 @@ export interface QuittanceProof {
     status: 'verified' | 'unverified';
     method: 'memo-and-amount' | 'none';
     checkedAt: string | null;
+    settlementContext: 'ON_TIME' | 'AFTER_EXPIRY' | 'AFTER_CANCEL' | null;
+    latePaymentWarningCode: string | null;
   };
   document: {
     generatedAtUtc: string;
@@ -71,6 +73,8 @@ export interface QuittanceProofInput {
   createdAt?: string | Date | null;
   paidAt?: string | Date | null;
   settledAt?: string | Date | null;
+  settlementContext?: string | null;
+  latePaymentWarningCode?: string | null;
 }
 
 export interface QuittanceProofOptions {
@@ -110,8 +114,19 @@ function normalizeAmount(value: string | number | null | undefined): string | nu
   return whole + '.' + fraction.padEnd(7, '0').slice(0, 7);
 }
 
+// Mirrors shared/network.ts's resolveStellarNetwork + explorerSegmentFor.
+// This file is loaded directly by node tests, which cannot follow the
+// '@shared/*' tsconfig alias, so the rule is inlined rather than imported.
 function normalizeNetwork(network: string | null | undefined): 'testnet' | 'public' {
-  return String(network ?? '').toLowerCase() === 'testnet' ? 'testnet' : 'public';
+  const hint = String(network ?? '').trim().toLowerCase();
+  if (hint === 'testnet' || hint === 'public') return hint;
+  const configured = String(process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? 'TESTNET')
+    .trim()
+    .toUpperCase();
+  if (configured !== 'TESTNET' && configured !== 'PUBLIC') {
+    throw new Error(`Stellar network must be TESTNET or PUBLIC; got "${configured}"`);
+  }
+  return configured === 'TESTNET' ? 'testnet' : 'public';
 }
 
 function isSettled(status: string): boolean {
@@ -188,7 +203,8 @@ export function buildQuittanceProof(
     txHash = candidate.toLowerCase();
   }
 
-  const checkedAt = settled ? utcIso(input.settledAt ?? input.paidAt) : null;
+  const checkedAt = settled ? utcIso(input.paidAt) : null;
+  const ledgerSettledAt = settled ? utcIso(input.settledAt ?? input.paidAt) : null;
   const generatedAt = (options.now ?? new Date()).toISOString();
 
   const proof: QuittanceProof = {
@@ -198,7 +214,7 @@ export function buildQuittanceProof(
     status: (['PAID', 'PENDING', 'EXPIRED', 'CANCELLED'].includes(status) ? status : 'PENDING') as QuittanceProof['status'],
     issuedAt: utcIso(input.createdAt) ?? generatedAt,
     dueAt: utcIso(input.expiresAt) ?? generatedAt,
-    settledAt: settled ? checkedAt : null,
+    settledAt: settled ? ledgerSettledAt : null,
     seller,
     payer: typeof input.payerPublicKey === 'string' && input.payerPublicKey.trim() !== ''
       ? input.payerPublicKey.trim()
@@ -214,8 +230,26 @@ export function buildQuittanceProof(
       explorerUrl: txHash ? buildHorizonTxUrl(txHash, network) : null,
     },
     verification: settled
-      ? { status: 'verified', method: 'memo-and-amount', checkedAt }
-      : { status: 'unverified', method: 'none', checkedAt: null },
+      ? {
+          status: 'verified',
+          method: 'memo-and-amount',
+          checkedAt,
+          settlementContext:
+            input.settlementContext === 'AFTER_EXPIRY' || input.settlementContext === 'AFTER_CANCEL'
+              ? input.settlementContext
+              : 'ON_TIME',
+          latePaymentWarningCode:
+            typeof input.latePaymentWarningCode === 'string' && input.latePaymentWarningCode !== ''
+              ? input.latePaymentWarningCode
+              : null,
+        }
+      : {
+          status: 'unverified',
+          method: 'none',
+          checkedAt: null,
+          settlementContext: null,
+          latePaymentWarningCode: null,
+        },
     document: { generatedAtUtc: generatedAt, generatedBy: 'quittance-web' },
   };
 
@@ -594,10 +628,19 @@ export function renderQuittanceProofHtml(proof: QuittanceProof): string {
           <div class="value mono">${escapeHtml(proof.verification.checkedAt ?? 'N/A')}</div>
         </div>
         <div class="field">
+          <div class="label">Settlement Context</div>
+          <div class="value mono">${escapeHtml(proof.verification.settlementContext ?? 'N/A')}</div>
+        </div>
+        <div class="field">
           <div class="label">Memo</div>
           <div class="value mono">${escapeHtml(proof.payment.memo ?? 'None')}</div>
         </div>
       </div>
+      ${proof.verification.latePaymentWarningCode ? `
+      <div class="field" style="margin-top:8px;">
+        <div class="label">Late Payment Warning</div>
+        <div class="value mono">${escapeHtml(proof.verification.latePaymentWarningCode)}</div>
+      </div>` : ''}
       <div class="field" style="margin-top:8px;">
         <div class="label">Transaction Hash</div>
         <div class="value mono">${escapeHtml(proof.payment.txHash || 'None')}</div>
@@ -677,16 +720,20 @@ export function createQuittanceProofPdf(
   }
 
   doc.text(`Verification: ${proof.verification.status} (${proof.verification.method})`, 14, 113);
-  doc.text(`Issued At (UTC): ${proof.issuedAt}`, 14, 120);
-  doc.text(`Due At (UTC): ${proof.dueAt}`, 14, 127);
-  doc.text(`Settled At (UTC): ${proof.settledAt || 'Not settled'}`, 14, 134);
+  doc.text(`Settlement Context: ${proof.verification.settlementContext || 'N/A'}`, 14, 120);
+  if (proof.verification.latePaymentWarningCode) {
+    doc.text(`Warning: ${proof.verification.latePaymentWarningCode}`, 14, 127);
+  }
+  doc.text(`Issued At (UTC): ${proof.issuedAt}`, 14, 134);
+  doc.text(`Due At (UTC): ${proof.dueAt}`, 14, 141);
+  doc.text(`Settled At (UTC): ${proof.settledAt || 'Not settled'}`, 14, 148);
 
-  doc.line(14, 142, 196, 142);
+  doc.line(14, 156, 196, 156);
   doc.setFontSize(8);
   doc.setTextColor(156, 163, 175);
-  doc.text(`Generated At (UTC): ${proof.document.generatedAtUtc}`, 14, 148);
-  doc.text(`Generated By: ${proof.document.generatedBy}`, 14, 153);
-  doc.text('Anchor: Stellar Horizon consensus verification', 14, 158);
+  doc.text(`Generated At (UTC): ${proof.document.generatedAtUtc}`, 14, 162);
+  doc.text(`Generated By: ${proof.document.generatedBy}`, 14, 167);
+  doc.text('Anchor: Stellar Horizon consensus verification', 14, 172);
 
   return doc;
 }

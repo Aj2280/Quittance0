@@ -174,12 +174,15 @@ class FakePostgresDb implements Queryable {
 
     if (sql.startsWith("UPDATE invoices SET status = 'PAID'") || sql.startsWith('WITH settled AS')) {
       const row = this.rows.find((candidate) => candidate.id === params[0]);
-      const settledAt = params[5] ? new Date(params[5]) : new Date();
+      const settledAt = params[5] ? new Date(params[5]) : null;
       const canSettle =
         row &&
+        settledAt &&
+        Number.isFinite(settledAt.getTime()) &&
         (
-          (row.status === 'PENDING' && new Date(row.expires_at).getTime() > Date.now()) ||
-          (row.status === 'CANCELLED' && row.cancelled_at && Number.isFinite(settledAt.getTime()))
+          row.status === 'PENDING' ||
+          row.status === 'EXPIRED' ||
+          (row.status === 'CANCELLED' && row.cancelled_at)
         );
 
       if (!row || !canSettle) {
@@ -190,6 +193,18 @@ class FakePostgresDb implements Queryable {
       const afterCancel =
         priorStatus === 'CANCELLED' &&
         settledAt.getTime() >= new Date(row.cancelled_at).getTime();
+      const expiresAt = row.expires_at ? new Date(row.expires_at) : null;
+      const afterExpiry = expiresAt
+        ? settledAt.getTime() >= expiresAt.getTime()
+        : priorStatus === 'EXPIRED';
+      const settlementContext =
+        priorStatus === 'CANCELLED'
+          ? afterCancel ? 'AFTER_CANCEL' : 'ON_TIME'
+          : afterExpiry ? 'AFTER_EXPIRY' : 'ON_TIME';
+      const warningCode =
+        priorStatus === 'CANCELLED'
+          ? afterCancel ? 'PAYMENT_RECEIVED_AFTER_CANCEL' : null
+          : afterExpiry ? 'PAYMENT_RECEIVED_AFTER_EXPIRY' : null;
 
       Object.assign(row, {
         status: 'PAID',
@@ -199,9 +214,9 @@ class FakePostgresDb implements Queryable {
         payer_email: params[4],
         paid_at: new Date(),
         settled_at: settledAt,
-        settlement_context: afterCancel ? 'AFTER_CANCEL' : 'ON_TIME',
-        prior_status: priorStatus === 'CANCELLED' ? 'CANCELLED' : null,
-        late_payment_warning_code: afterCancel ? 'PAYMENT_RECEIVED_AFTER_CANCEL' : null,
+        settlement_context: settlementContext,
+        prior_status: priorStatus !== 'PENDING' || afterExpiry ? priorStatus : null,
+        late_payment_warning_code: warningCode,
       });
       this.events.push({
         invoiceId: row.id,
@@ -213,6 +228,7 @@ class FakePostgresDb implements Queryable {
           settlementContext: row.settlement_context,
           priorStatus: row.prior_status,
           latePaymentWarningCode: row.late_payment_warning_code,
+          ...(params[6] ? { destinationMuxedId: params[6] } : {}),
         },
       });
       return { rows: [{ ...row }], rowCount: 1 };
@@ -369,6 +385,85 @@ function runManualVerifySuite(name: string, createStorage: () => InvoiceStorage)
       const stored = await storage.getInvoiceById(invoice.id);
       assert.equal(stored?.status, 'PAID');
       assert.equal(stored?.paymentTxHash, TX_HASH);
+    });
+
+    it('settles a payment whose ledger close time passed expiresAt as AFTER_EXPIRY', async () => {
+      const invoice = await createInvoice();
+      const settledAt = isoOffset(invoice.expiresAt, 1000);
+      transaction = paymentTransaction({ memo: invoice.memo, createdAt: settledAt });
+
+      const verified = await call(
+        handlers().verifyPayment,
+        createReq({ params: { id: invoice.id }, body: { txHash: TX_HASH } })
+      );
+
+      assert.equal(verified.statusCode, 200, JSON.stringify(verified.body));
+      assert.equal(verified.body.code, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
+      assert.equal(verified.body.warning, 'Payment was received after this invoice expired.');
+      assert.equal(verified.body.data.status, 'PAID');
+      assert.equal(verified.body.data.settlementContext, 'AFTER_EXPIRY');
+      assert.equal(new Date(verified.body.data.settledAt).toISOString(), settledAt);
+      assert.equal(verified.body.data.priorStatus, 'PENDING');
+      assert.equal(verified.body.data.latePaymentWarningCode, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
+    });
+
+    it('settles a payment on an already-EXPIRED invoice as AFTER_EXPIRY', async () => {
+      const invoice = await createInvoice();
+      await storage.markExpiredInvoices(new Date(isoOffset(invoice.expiresAt, 1000)));
+      const settledAt = isoOffset(invoice.expiresAt, 1000);
+      transaction = paymentTransaction({ memo: invoice.memo, createdAt: settledAt });
+
+      const verified = await call(
+        handlers().verifyPayment,
+        createReq({ params: { id: invoice.id }, body: { txHash: TX_HASH } })
+      );
+
+      assert.equal(verified.statusCode, 200, JSON.stringify(verified.body));
+      assert.equal(verified.body.code, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
+      assert.equal(verified.body.data.status, 'PAID');
+      assert.equal(verified.body.data.settlementContext, 'AFTER_EXPIRY');
+      assert.equal(verified.body.data.priorStatus, 'EXPIRED');
+      assert.equal(verified.body.data.latePaymentWarningCode, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
+    });
+
+    it('keeps a payment included before expiry ON_TIME when detected after the sweep', async () => {
+      const invoice = await createInvoice();
+      await storage.markExpiredInvoices(new Date(isoOffset(invoice.expiresAt, 1000)));
+      const settledAt = isoOffset(invoice.expiresAt, -1000);
+      transaction = paymentTransaction({ memo: invoice.memo, createdAt: settledAt });
+
+      const verified = await call(
+        handlers().verifyPayment,
+        createReq({ params: { id: invoice.id }, body: { txHash: TX_HASH } })
+      );
+
+      assert.equal(verified.statusCode, 200, JSON.stringify(verified.body));
+      assert.equal(verified.body.code, undefined);
+      assert.equal(verified.body.warning, undefined);
+      assert.equal(verified.body.data.status, 'PAID');
+      assert.equal(verified.body.data.settlementContext, 'ON_TIME');
+      assert.equal(new Date(verified.body.data.settledAt).toISOString(), settledAt);
+      assert.equal(verified.body.data.priorStatus, 'EXPIRED');
+      assert.ok(!verified.body.data.latePaymentWarningCode);
+    });
+
+    it('refuses to settle when the transaction close time is missing', async () => {
+      const invoice = await createInvoice();
+      const tx = paymentTransaction({ memo: invoice.memo, createdAt: new Date().toISOString() });
+      delete tx.transaction.created_at;
+      transaction = tx;
+
+      const verified = await call(
+        handlers().verifyPayment,
+        createReq({ params: { id: invoice.id }, body: { txHash: TX_HASH } })
+      );
+
+      assert.equal(verified.statusCode, 503, JSON.stringify(verified.body));
+      assert.equal(verified.body.code, 'TRANSACTION_CLOSE_TIME_UNAVAILABLE');
+
+      const stored = await storage.getInvoiceById(invoice.id);
+      assert.equal(stored?.status, 'PENDING');
+      assert.equal(Boolean(stored?.paymentTxHash), false);
     });
   });
 }

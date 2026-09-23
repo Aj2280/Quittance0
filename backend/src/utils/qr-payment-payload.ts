@@ -7,6 +7,7 @@
 
 import { Keypair } from '@stellar/stellar-sdk';
 import { formatStroops, parseStroops, STROOP_DECIMALS } from './safe-amount-compare';
+import { fitsStellarTextMemo } from '../../../shared/memo';
 
 /**
  * Asset description used inside a QR payment payload.
@@ -136,6 +137,12 @@ export const formatQrPaymentPayload = (
   }
 
   if (memo !== undefined && memo !== null && memo !== '') {
+    // The URI advertises memo_type=MEMO_TEXT, so refuse to encode a memo the
+    // chain could not carry as text rather than emitting a QR that submits
+    // and fails.
+    if (!fitsStellarTextMemo(memo)) {
+      throw new Error('memo exceeds the 28-byte Stellar text memo limit');
+    }
     params.memo = memo;
     params.memo_type = 'MEMO_TEXT';
   }

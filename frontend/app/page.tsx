@@ -23,10 +23,10 @@ import { canonicalAmount } from '@/lib/stroop-amount';
 
 export default function HomePage() {
   const [createdInvoice, setCreatedInvoice] = useState<any>(null);
-  const { publicKey, connected, network, freighterAvailable, isWrongNetwork } = useWalletStore();
+  const { publicKey, connected, network, networkPassphrase, freighterAvailable, isWrongNetwork } = useWalletStore();
   const resultRef = useRef<HTMLDivElement>(null);
   const gate = walletGate(
-    { freighterAvailable, connected, publicKey, network },
+    { freighterAvailable, connected, publicKey, network, networkPassphrase },
     EXPECTED_WALLET_NETWORK
   );
 

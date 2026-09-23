@@ -67,27 +67,34 @@ describe('payment URI — the gaps, proven against the SDK', () => {
     );
   });
 
-  it('emits a memo the SDK will not attach to a transaction', () => {
-    const result = formatQrPaymentPayload({
-      destination: VALID_DESTINATION,
-      amount: '25',
-      memo: MEMO_32_BYTES,
-    });
-    assert.ok(result.params.memo === MEMO_32_BYTES);
+  it('refuses a memo the SDK will not attach to a transaction', () => {
+    assert.throws(
+      () =>
+        formatQrPaymentPayload({
+          destination: VALID_DESTINATION,
+          amount: '25',
+          memo: MEMO_32_BYTES,
+        }),
+      /28-byte/,
+      'the formatter refuses before the SDK is ever reached'
+    );
 
     assert.throws(() => Memo.text(MEMO_32_BYTES), /max 28 bytes/);
   });
 
-  it('counts the memo ceiling in bytes, and emits an over-limit non-ASCII memo anyway', () => {
-    const result = formatQrPaymentPayload({
-      destination: VALID_DESTINATION,
-      amount: '25',
-      memo: MEMO_30_BYTES_NON_ASCII,
-    });
-    assert.equal(result.params.memo, MEMO_30_BYTES_NON_ASCII);
-
+  it('counts the memo ceiling in bytes, and refuses an over-limit non-ASCII memo', () => {
     assert.equal(MEMO_30_BYTES_NON_ASCII.length, 10, 'ten characters');
     assert.equal(Buffer.byteLength(MEMO_30_BYTES_NON_ASCII), 30, 'thirty bytes');
+
+    assert.throws(
+      () =>
+        formatQrPaymentPayload({
+          destination: VALID_DESTINATION,
+          amount: '25',
+          memo: MEMO_30_BYTES_NON_ASCII,
+        }),
+      /28-byte/
+    );
     assert.throws(() => Memo.text(MEMO_30_BYTES_NON_ASCII), /max 28 bytes/);
   });
 
@@ -127,12 +134,10 @@ describe('payment URI — keeping the gap list honest', () => {
     }
   });
 
-  it('holds four gaps, so adding or closing one is a deliberate edit', () => {
+  it('holds two gaps, so adding or closing one is a deliberate edit', () => {
     assert.deepEqual(
       GAPS.map((c) => c.name),
       [
-        'a memo over 28 bytes is emitted anyway',
-        'a non-ASCII memo over the byte ceiling is emitted anyway',
         'XLM with an issuer is silently downgraded to a native payment',
         'a muxed account destination is refused',
       ],

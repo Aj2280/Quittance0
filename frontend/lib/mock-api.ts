@@ -1,5 +1,7 @@
 // Mock API - Backend olmadan UI test için
 
+import { PUBLIC_INVOICE_FIELDS } from '@shared/invoice';
+
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const MIN_EXPIRY_DAYS = 1;
 const MAX_EXPIRY_DAYS = 30;
@@ -116,13 +118,25 @@ export const mockInvoiceApi = {
     };
   },
 
-  getById: async (id: string) => {
+  getById: async (id: string, sellerPublicKey?: string | null) => {
     await delay(500);
     expirePendingInvoices();
     const invoice = mockInvoices.find(inv => inv.id === id);
     
     if (!invoice) {
       throw new Error('Invoice not found');
+    }
+
+    // Mirrors the backend split (#503): workspace fields only for the seller.
+    if (sellerPublicKey !== invoice.sellerPublicKey) {
+      const publicDto: Record<string, unknown> = {};
+      for (const key of PUBLIC_INVOICE_FIELDS) {
+        if ((invoice as any)[key] !== undefined) publicDto[key] = (invoice as any)[key];
+      }
+      return {
+        success: true,
+        data: publicDto,
+      };
     }
 
     return {

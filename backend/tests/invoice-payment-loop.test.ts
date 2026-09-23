@@ -25,9 +25,12 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Application } from 'express';
+import { Account, Keypair, MuxedAccount } from '@stellar/stellar-sdk';
+import memoryStorage from '../src/storage/memory-storage';
 
 const SELLER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 const PAYER = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+const OTHER = Keypair.random().publicKey();
 /**
  * A distinct transaction hash per verification, as Stellar guarantees: a hash
  * belongs to exactly one transaction, and one transaction settles one invoice
@@ -152,6 +155,9 @@ async function createInvoice(port: number, amount = 25) {
     },
     {
       'x-forwarded-for': `203.0.113.${++createRequestSequence}`,
+      // Each helper call is a distinct create intent; identical bodies inside
+      // the dedupe window would otherwise return the same invoice (#514).
+      'idempotency-key': `loop-${createRequestSequence}`,
     }
   );
 
@@ -222,6 +228,39 @@ describe('invoice payment loop', () => {
     assert.equal(fetched.body.data.status, 'PAID');
   });
 
+  it('settles a payment sent to a muxed M... account of the seller', async () => {
+    const invoice = await createInvoice(port);
+    const muxed = new MuxedAccount(new Account(SELLER, '0'), '4242').accountId();
+    horizonResponder = paymentOn({ memo: invoice.memo, to: muxed });
+
+    const verified = await jsonRequest(port, 'POST', `/api/invoices/${invoice.id}/verify`, {
+      txHash: nextTxHash(),
+    });
+
+    assert.equal(verified.status, 200, JSON.stringify(verified.body));
+    assert.equal(verified.body.data.status, 'PAID');
+
+    const events = memoryStorage.getPaymentEvents(invoice.id);
+    const confirmed = events.filter((event) => event.eventType === 'PAYMENT_CONFIRMED');
+    assert.equal(confirmed.at(-1)?.eventData.destinationMuxedId, '4242');
+  });
+
+  it('refuses a payment to a muxed M... account of a different seller', async () => {
+    const invoice = await createInvoice(port);
+    const foreignMuxed = new MuxedAccount(new Account(OTHER, '0'), '4242').accountId();
+    horizonResponder = paymentOn({ memo: invoice.memo, to: foreignMuxed });
+
+    const verified = await jsonRequest(port, 'POST', `/api/invoices/${invoice.id}/verify`, {
+      txHash: nextTxHash(),
+    });
+
+    assert.equal(verified.status, 400);
+    assert.equal(verified.body.code, 'DESTINATION_MISMATCH');
+
+    const fetched = await jsonRequest(port, 'GET', `/api/invoices/${invoice.id}`);
+    assert.equal(fetched.body.data.status, 'PENDING');
+  });
+
   it('stores payer details supplied with the verification', async () => {
     const invoice = await createInvoice(port);
     horizonResponder = paymentOn({ memo: invoice.memo });
@@ -233,8 +272,15 @@ describe('invoice payment loop', () => {
     });
 
     assert.equal(verified.status, 200);
-    assert.equal(verified.body.data.payerName, 'Ada Lovelace');
-    assert.equal(verified.body.data.payerEmail, 'ada@example.com');
+    // Payer identity is workspace-scoped (#503): read it back through the
+    // seller view rather than the public verify response.
+    const stored = await jsonRequest(
+      port,
+      'GET',
+      `/api/invoices/${invoice.id}?sellerPublicKey=${SELLER}`
+    );
+    assert.equal(stored.body.data.payerName, 'Ada Lovelace');
+    assert.equal(stored.body.data.payerEmail, 'ada@example.com');
   });
 
   it('refuses a transaction whose memo belongs to another invoice', async () => {

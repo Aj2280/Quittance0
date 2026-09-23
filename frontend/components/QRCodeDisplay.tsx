@@ -16,6 +16,12 @@ interface QRCodeDisplayProps {
    * wording; the pay page passes something more specific.
    */
   description?: string;
+  /**
+   * What the copy row carries when it differs from `value`. A QR generated
+   * from an image data-URL would otherwise expose the blob instead of the
+   * SEP-0007 URI it encodes (issue #510).
+   */
+  copyValue?: string;
 }
 
 export default function QRCodeDisplay({
@@ -24,11 +30,13 @@ export default function QRCodeDisplay({
   size = 256,
   showCopy = true,
   description = 'the payment link for this invoice',
+  copyValue,
 }: QRCodeDisplayProps) {
   const [copied, setCopied] = useState(false);
+  const copyableValue = copyValue ?? value;
 
   const handleCopy = async () => {
-    const success = await copyWithFeedback(value);
+    const success = await copyWithFeedback(copyableValue);
     if (success) {
       setCopied(true);
       toast.success('Copied to clipboard!');
@@ -93,7 +101,7 @@ export default function QRCodeDisplay({
         <div className="w-full max-w-md">
           <div className="flex items-center gap-2 bg-gray-50 p-3 rounded-lg border border-gray-200">
             <code className="flex-1 text-xs text-gray-700 truncate font-mono">
-              {value}
+              {copyableValue}
             </code>
             <button
               type="button"
