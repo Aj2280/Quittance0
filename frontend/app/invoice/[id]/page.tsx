@@ -37,12 +37,13 @@ export default function InvoiceDetailPage() {
     publicKey: storePublicKey,
     connected,
     network,
+    networkPassphrase,
     freighterAvailable,
   } = useWalletStore();
   // The gate and the acting wallet are read by the loaders below, so they
   // are computed here rather than beside the JSX they also serve.
   const gate = walletGate(
-    { freighterAvailable, connected, publicKey, network },
+    { freighterAvailable, connected, publicKey, network, networkPassphrase },
     EXPECTED_WALLET_NETWORK
   );
   const userWallet = gate.ready ? publicKey : null;
