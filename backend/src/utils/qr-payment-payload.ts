@@ -6,6 +6,7 @@
 // any QR generation library.
 
 import { Keypair } from '@stellar/stellar-sdk';
+import { formatStroops, parseStroops, STROOP_DECIMALS } from './safe-amount-compare';
 import { fitsStellarTextMemo } from '../../../shared/memo';
 
 /**
@@ -102,7 +103,14 @@ export const formatQrPaymentPayload = (
     throw new Error('amount must be a string');
   }
 
-  if (!/^\d+(\.\d+)?$/.test(amount) || Number(amount) <= 0) {
+  if (!/^\d+(\.\d+)?$/.test(amount)) {
+    throw new Error('amount must be a positive number');
+  }
+  if ((amount.split('.')[1] ?? '').length > STROOP_DECIMALS) {
+    throw new Error(`amount must have at most ${STROOP_DECIMALS} decimal places`);
+  }
+  const stroops = parseStroops(amount);
+  if (stroops === null || stroops <= 0n) {
     throw new Error('amount must be a positive number');
   }
 
@@ -120,7 +128,7 @@ export const formatQrPaymentPayload = (
 
   const params: Record<string, string> = {
     destination,
-    amount,
+    amount: formatStroops(stroops),
   };
 
   if (!isNative && assetIssuer) {

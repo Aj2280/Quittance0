@@ -1,6 +1,7 @@
 'use client';
 
 import { formatAmount, formatDate } from '@/lib/utils';
+import { canonicalAmount } from '@/lib/stroop-amount';
 import { describeAmount } from '@/lib/a11y';
 import { Check, Download, ExternalLink, FileText, Mail } from 'lucide-react';
 import AssetLogo from './AssetLogo';
@@ -65,7 +66,7 @@ ${warning ? `Warning: ${warning.title}. ${warning.body}` : ''}
 PAYMENT DETAILS
 ───────────────────────────────────────
 
-Amount Paid: ${formatAmount(invoice.amount, 7)} ${invoice.assetCode}
+Amount Paid: ${canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7)} ${invoice.assetCode}
 ${invoice.description ? `Description: ${invoice.description}` : ''}
 ${invoice.customerName ? `Customer: ${invoice.customerName}` : ''}
 ${invoice.customerEmail ? `Email: ${invoice.customerEmail}` : ''}
@@ -103,7 +104,10 @@ Stellar Blockchain Payment System
   };
 
   const activeAssetCode = invoice.assetCode || 'XLM';
-  const amountLabel = describeAmount(formatAmount(invoice.amount, 7), activeAssetCode);
+  const amountLabel = describeAmount(
+    canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7),
+    activeAssetCode
+  );
   /*
    * The explorer link has to follow the network the payment was made on. A
    * hardcoded 'public' sent a testnet seller to a mainnet page that can never
@@ -164,7 +168,7 @@ Stellar Blockchain Payment System
             <AssetLogo code={invoice.assetCode} size={36} showName={false} decorative />
             <div aria-hidden="true">
               <p className="text-4xl font-bold text-green-700">
-                {formatAmount(invoice.amount, 7)}
+                {canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7)}
               </p>
               <p className="text-lg font-semibold text-green-700 mt-1">
                 {invoice.assetCode}

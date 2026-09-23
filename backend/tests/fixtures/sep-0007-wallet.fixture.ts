@@ -43,7 +43,7 @@ export const SEP7_RESEARCH_VECTORS: Sep7ResearchVector[] = [
     recommendation: 'accept',
     current: 'accept',
     expectedUri:
-      `web+stellar:pay?destination=${VALID_DESTINATION}&amount=5.25&asset_code=USDC&asset_issuer=${VALID_ASSET_ISSUER}&memo=Q-382-2&memo_type=MEMO_TEXT`,
+      `web+stellar:pay?destination=${VALID_DESTINATION}&amount=5.2500000&asset_code=USDC&asset_issuer=${VALID_ASSET_ISSUER}&memo=Q-382-2&memo_type=MEMO_TEXT`,
     walletNote: 'Wallet may use a path payment, but the destination must receive this exact asset.',
   },
   {
@@ -52,7 +52,7 @@ export const SEP7_RESEARCH_VECTORS: Sep7ResearchVector[] = [
     recommendation: 'accept',
     current: 'accept',
     expectedUri:
-      `web+stellar:pay?destination=${VALID_DESTINATION}&amount=1&memo=1234567890123456789012345678&memo_type=MEMO_TEXT`,
+      `web+stellar:pay?destination=${VALID_DESTINATION}&amount=1.0000000&memo=1234567890123456789012345678&memo_type=MEMO_TEXT`,
     walletNote: 'MEMO_TEXT allows at most 28 UTF-8 bytes.',
   },
   {

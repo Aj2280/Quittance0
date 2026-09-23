@@ -30,10 +30,10 @@ export const VALID_CASES: QrPayloadFixtureCase[] = [
       amount: '100',
     },
     expected: {
-      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=100`,
+      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=100.0000000`,
       params: {
         destination: VALID_DESTINATION,
-        amount: '100',
+        amount: '100.0000000',
       },
     },
   },
@@ -45,12 +45,12 @@ export const VALID_CASES: QrPayloadFixtureCase[] = [
       memo: 'Invoice #1234',
     },
     expected: {
-      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=42.50&memo=${encodeURIComponent(
+      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=42.5000000&memo=${encodeURIComponent(
         'Invoice #1234',
       )}&memo_type=MEMO_TEXT`,
       params: {
         destination: VALID_DESTINATION,
-        amount: '42.50',
+        amount: '42.5000000',
         memo: 'Invoice #1234',
         memo_type: 'MEMO_TEXT',
       },
@@ -67,10 +67,10 @@ export const VALID_CASES: QrPayloadFixtureCase[] = [
       },
     },
     expected: {
-      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=10&asset_code=USDC&asset_issuer=${VALID_ASSET_ISSUER}`,
+      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=10.0000000&asset_code=USDC&asset_issuer=${VALID_ASSET_ISSUER}`,
       params: {
         destination: VALID_DESTINATION,
-        amount: '10',
+        amount: '10.0000000',
         asset_code: 'USDC',
         asset_issuer: VALID_ASSET_ISSUER,
       },
@@ -88,10 +88,10 @@ export const VALID_CASES: QrPayloadFixtureCase[] = [
       },
     },
     expected: {
-      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=7.5&asset_code=USDC&asset_issuer=${VALID_ASSET_ISSUER}&memo=tip&memo_type=MEMO_TEXT`,
+      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=7.5000000&asset_code=USDC&asset_issuer=${VALID_ASSET_ISSUER}&memo=tip&memo_type=MEMO_TEXT`,
       params: {
         destination: VALID_DESTINATION,
-        amount: '7.5',
+        amount: '7.5000000',
         asset_code: 'USDC',
         asset_issuer: VALID_ASSET_ISSUER,
         memo: 'tip',

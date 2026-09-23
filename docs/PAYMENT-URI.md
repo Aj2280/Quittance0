@@ -26,7 +26,7 @@ no QR work; `generateStellarPaymentQR` encodes with error correction level H.
 | --- | --- | --- | --- |
 | scheme | `web+stellar:pay?` | `web+stellar:<operation>?<params>`, `pay` operation | conformant |
 | `destination` | the seller's `G...` key | required: "a valid account ID **or payment address**" | G-addresses only — a valid `M...` payment address is refused (gap 4) |
-| `amount` | `invoice.amount.toString()` | optional; Stellar amounts carry at most 7 decimals | emitted unchanged — 8+ decimals pass through (gap 1) |
+| `amount` | canonical 7-decimal stroop string (`formatStroops` of the parsed input) | optional; Stellar amounts carry at most 7 decimals | conformant — 8+ decimals are refused before the URI is built |
 | `asset_code` | only for non-native assets | optional, "XLM if not present" | conformant; an XLM-labelled credit asset loses its issuer silently (gap 5) |
 | `asset_issuer` | with `asset_code` | optional, same rule | conformant |
 | `memo` | the invoice memo, `INV-<ms>-<8>`, 21 chars | optional; `MEMO_TEXT` must be URL-encoded (`MEMO_HASH`/`MEMO_RETURN` are base64 **then** URL-encoded) | conformant — the formatter refuses memos over 28 UTF-8 bytes |
@@ -70,12 +70,12 @@ the end for what that leaves open.
 
 | # | Case | Emitted today | Wallet outcome | Change? |
 | --- | --- | --- | --- | --- |
-| 1 | Native XLM, no memo | `?destination=G...&amount=25` | pays — absent `asset_code` means native | no |
+| 1 | Native XLM, no memo | `?destination=G...&amount=25.0000000` | pays — absent `asset_code` means native | no |
 | 2 | The invoice memo | `...&memo=INV-LX7Q9A3B-KM2P8NQR&memo_type=MEMO_TEXT` | pays | no |
 | 3 | USDC with issuer, 7 decimals | `...&asset_code=USDC&asset_issuer=G...` | pays **only if** the payer has the trustline; the URI cannot express "add it first" | no |
 | 4 | One stroop | `amount=0.0000001` | pays | no |
 | 5 | Memo at 28 bytes | full memo | pays — the ceiling is inclusive | no |
-| 6 | Amount with 8 decimals | `amount=1.12345678` | **fails**: `Operation.payment` refuses more than 7 decimals | yes — gap 1 |
+| 6 | Amount with 8 decimals | — | **refused by the formatter** with a message naming the 7-decimal ceiling | no — closed |
 | 7 | Memo at 32 bytes | — | **refused by the formatter**: `Memo.text` refuses past 28 bytes | no — closed |
 | 8 | Non-ASCII memo, 30 bytes | — | **refused by the formatter** on the byte count, not the character count | no — closed |
 | 9 | XLM with an issuer | `?destination=...&amount=25` — issuer dropped | pays, but as a **native** payment: the issuer the caller supplied is gone, and nothing says so | yes — gap 5 |
@@ -90,9 +90,10 @@ diff shows in the suite. The memo byte-cap (former gaps 2, 3) is done: the
 formatter refuses a memo over 28 UTF-8 bytes and names the ceiling in the
 message.
 
-1. **Refuse amounts with more than seven decimals** (gap 1). The same rule belongs
-   at invoice creation, which currently accepts any number up to `1e9` — a second
-   invoice that can never be paid exactly, which is issue #378's territory.
+1. ~~Refuse amounts with more than seven decimals~~ — **done**: the formatter
+   throws past seven decimals and emits the canonical stroop string. The same
+   rule could still be applied earlier, at invoice creation, which accepts any
+   number up to `1e9` — issue #378's territory.
 2. **Throw for a native code carrying an issuer** (gap 5), mirroring the
    `createInvoiceSchema` refinement that already refuses it. Silently dropping an
    issuer is the one gap where the URI succeeds and the money goes somewhere the
@@ -108,7 +109,7 @@ The remaining gaps rest on protocol refusals, which is the right authority, but 
 formatter change should not ship on that alone. With testnet funds:
 
 1. Freighter on testnet: scan case 1, then case 3 against a wallet with no USDC
-   trustline, then case 6.
+   trustline, then case 7.
 2. LOBSTR: the same three.
 3. xBull: case 10, to find out which wallets already accept `M...` destinations
    (if one does, gap 4 is a compatibility question rather than a blocker).

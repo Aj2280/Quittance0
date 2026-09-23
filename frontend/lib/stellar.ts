@@ -25,6 +25,7 @@ import {
   resolveStellarNetwork,
   walletNetworkMatches,
 } from '@shared/network';
+import { canonicalAmount } from './stroop-amount.js';
 import {
   accountHasTrustline,
   classifyTrustlinePreflight,
@@ -429,7 +430,9 @@ export const sendPayment = async (
         StellarSdk.Operation.payment({
           destination,
           asset,
-          amount,
+          // Canonical stroop string: the SDK rejects exponent notation like
+          // `1e-7`, and any float formatting risks a one-stroop drift.
+          amount: formatStellarAmount(amount),
         })
       )
       .addMemo(StellarSdk.Memo.text(memo))
@@ -541,10 +544,12 @@ export const signInvoiceCancelMessage = async (
 };
 
 /**
- * Format Stellar amount (remove trailing zeros)
+ * Format a Stellar amount for operations and display. Routes through the
+ * stroop helpers so small amounts never surface as exponent strings like
+ * `1e-7`, which neither the SDK nor the SEP-0007 URI schema accepts.
  */
 export const formatStellarAmount = (amount: string | number): string => {
-  return parseFloat(amount.toString()).toString();
+  return canonicalAmount(amount) ?? amount.toString();
 };
 
 /**

@@ -12,7 +12,50 @@ export interface AmountDelta {
 }
 
 /**
+ * Expands JavaScript's exponential `toString()` output (`1e-7`, `1.5e+21`)
+ * into plain decimal so the digits-only parser below can consume it. Values
+ * that are not exponential pass through untouched.
+ */
+function expandExponential(str: string): string {
+  if (!/[eE]/.test(str)) {
+    return str;
+  }
+  const parts = str.split(/[eE]/);
+  if (parts.length !== 2) {
+    return str;
+  }
+  const [mantissa, exponentRaw] = parts;
+  const exponent = Number.parseInt(exponentRaw, 10);
+  if (
+    !Number.isFinite(exponent) ||
+    !/^[+-]?\d+$/.test(exponentRaw) ||
+    !/^-?\d+(\.\d+)?$/.test(mantissa)
+  ) {
+    return str;
+  }
+  const negative = mantissa.startsWith('-');
+  const unsigned = negative ? mantissa.slice(1) : mantissa;
+  const dotIndex = unsigned.indexOf('.');
+  const digits = unsigned.replace('.', '');
+  const dotPosition = dotIndex === -1 ? digits.length : dotIndex;
+  const newDot = dotPosition + exponent;
+  let expanded: string;
+  if (newDot <= 0) {
+    expanded = '0.' + '0'.repeat(-newDot) + digits;
+  } else if (newDot >= digits.length) {
+    expanded = digits + '0'.repeat(newDot - digits.length);
+  } else {
+    expanded = digits.slice(0, newDot) + '.' + digits.slice(newDot);
+  }
+  return (negative ? '-' : '') + expanded;
+}
+
+/**
  * Converts a string decimal or number representation into an integer stroop count.
+ *
+ * Number inputs go through `expandExponential` first: doubles like `1e-7`
+ * stringify with an exponent, which would otherwise fail the decimal pattern
+ * and silently reject a legitimate stroop-level amount.
  *
  * @param value - String decimal, number, or bigint to convert.
  * @returns BigInt representation in stroops (10^-7 units), or null if the input is invalid.
@@ -44,6 +87,10 @@ export function parseStroops(value: unknown): bigint | null {
   } else {
     return null;
   }
+
+  // Strings can carry exponent notation too — a DECIMAL column read through a
+  // lossy driver, or JSON round-tripped through String(1e-7).
+  str = expandExponential(str);
 
   if (!/^\d+(\.\d+)?$/.test(str)) {
     return null;
@@ -80,6 +127,16 @@ export function formatStroops(stroops: bigint): string {
   const fracPart = (absStroops % STROOPS_PER_UNIT).toString().padStart(STROOP_DECIMALS, '0');
   const formatted = `${intPart.toString()}.${fracPart}`;
   return isNegative ? `-${formatted}` : formatted;
+}
+
+/**
+ * The one parse-and-format path every amount surface shares: verify compares,
+ * monitor events, proofs, and QR payloads all emit the same 7-decimal stroop
+ * string for a given input. Returns null when the input is not a valid amount.
+ */
+export function canonicalAmount(value: unknown): string | null {
+  const stroops = parseStroops(value);
+  return stroops === null ? null : formatStroops(stroops);
 }
 
 /**

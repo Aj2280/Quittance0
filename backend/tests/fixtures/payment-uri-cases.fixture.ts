@@ -52,26 +52,26 @@ export interface PaymentUriCase {
 export const PAYMENT_URI_CASES: PaymentUriCase[] = [
   {
     name: 'native payment: no asset_code means XLM',
-    why: 'SEP-0007 reads a missing asset_code as the native asset, so the shortest URI is also the correct one.',
+    why: 'SEP-0007 reads a missing asset_code as the native asset. A bare "25" is canonicalized to the seven-decimal stroop string the verifier compares.',
     status: 'conformant',
     input: { destination: VALID_DESTINATION, amount: '25' },
     expected: {
       kind: 'uri',
-      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25`,
-      params: { destination: VALID_DESTINATION, amount: '25' },
+      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25.0000000`,
+      params: { destination: VALID_DESTINATION, amount: '25.0000000' },
     },
   },
   {
     name: 'invoice memo: the shape the product actually emits',
     why: 'The generated memo is 21 characters, well inside the 28-byte ceiling, and is tagged MEMO_TEXT.',
     status: 'conformant',
-    input: { destination: VALID_DESTINATION, amount: '25', memo: INVOICE_MEMO },
+    input: { destination: VALID_DESTINATION, amount: '25.0000000', memo: INVOICE_MEMO },
     expected: {
       kind: 'uri',
-      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25&memo=${INVOICE_MEMO}&memo_type=MEMO_TEXT`,
+      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25.0000000&memo=${INVOICE_MEMO}&memo_type=MEMO_TEXT`,
       params: {
         destination: VALID_DESTINATION,
-        amount: '25',
+        amount: '25.0000000',
         memo: INVOICE_MEMO,
         memo_type: 'MEMO_TEXT',
       },
@@ -112,29 +112,24 @@ export const PAYMENT_URI_CASES: PaymentUriCase[] = [
     name: 'memo at the 28-byte ceiling',
     why: 'The boundary is inclusive: 28 bytes is accepted by Memo.text, and the URI carries the whole memo.',
     status: 'conformant',
-    input: { destination: VALID_DESTINATION, amount: '25', memo: MEMO_28_BYTES },
+    input: { destination: VALID_DESTINATION, amount: '25.0000000', memo: MEMO_28_BYTES },
     expected: {
       kind: 'uri',
-      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25&memo=${MEMO_28_BYTES}&memo_type=MEMO_TEXT`,
+      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25.0000000&memo=${MEMO_28_BYTES}&memo_type=MEMO_TEXT`,
       params: {
         destination: VALID_DESTINATION,
-        amount: '25',
+        amount: '25.0000000',
         memo: MEMO_28_BYTES,
         memo_type: 'MEMO_TEXT',
       },
     },
   },
   {
-    name: 'an amount with eight decimals is emitted anyway',
-    why: 'Stellar amounts have seven decimals. The SDK refuses this string when the payment is built; the URI carries it to the wallet regardless.',
-    status: 'gap',
-    followUp: 'Refuse more than seven decimals at the formatter, with the reason, rather than deferring to the wallet.',
+    name: 'an amount with eight decimals is refused',
+    why: 'Stellar amounts have seven decimals. The formatter rejects the eighth decimal before a wallet can round it into a different payment.',
+    status: 'conformant',
     input: { destination: VALID_DESTINATION, amount: '1.12345678' },
-    expected: {
-      kind: 'uri',
-      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=1.12345678`,
-      params: { destination: VALID_DESTINATION, amount: '1.12345678' },
-    },
+    expected: { kind: 'throws', message: 'amount must have at most 7 decimal places' },
   },
   {
     name: 'a memo over 28 bytes is refused',
@@ -163,13 +158,13 @@ export const PAYMENT_URI_CASES: PaymentUriCase[] = [
     followUp: 'Throw for a native code carrying an issuer, mirroring the rule in createInvoiceSchema.',
     input: {
       destination: VALID_DESTINATION,
-      amount: '25',
+      amount: '25.0000000',
       asset: { code: 'XLM', issuer: VALID_ASSET_ISSUER },
     },
     expected: {
       kind: 'uri',
-      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25`,
-      params: { destination: VALID_DESTINATION, amount: '25' },
+      uri: `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25.0000000`,
+      params: { destination: VALID_DESTINATION, amount: '25.0000000' },
     },
   },
   {
@@ -177,14 +172,14 @@ export const PAYMENT_URI_CASES: PaymentUriCase[] = [
     why: 'SEP-0007 accepts an account ID or a payment address. Keypair.fromPublicKey only understands the first, so a valid M... destination cannot be paid by QR.',
     status: 'gap',
     followUp: 'Resolve the destination through StrKey (G or M) instead of Keypair.fromPublicKey.',
-    input: { destination: MUXED_DESTINATION, amount: '25' },
+    input: { destination: MUXED_DESTINATION, amount: '25.0000000' },
     expected: { kind: 'throws', message: 'destination must be a valid Stellar public key' },
   },
   {
     name: 'a credit asset with no issuer is refused',
     why: 'An unpinned asset names nothing in particular, so the formatter declines to build a URI for it.',
     status: 'conformant',
-    input: { destination: VALID_DESTINATION, amount: '25', asset: { code: 'USDC' } },
+    input: { destination: VALID_DESTINATION, amount: '25.0000000', asset: { code: 'USDC' } },
     expected: { kind: 'throws', message: 'asset issuer is required for USDC' },
   },
   {

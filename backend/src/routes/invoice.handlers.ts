@@ -38,6 +38,7 @@ import {
   warningForLatePayment,
 } from '../domain/invoice-settlement';
 import { cutoverDrainMode, simulationAllowed } from '../config/runtime';
+import { canonicalAmount } from '../utils/safe-amount-compare';
 import { idempotencyKeyForCreate } from '../utils/idempotency';
 import { createRequestId } from '../utils/request-correlation-id';
 import { checkInvoiceVerifyLimit } from '../middleware/rate-limit';
@@ -145,7 +146,9 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
 
     const stellarPayment = await generateStellarPaymentQR(
       invoice.sellerPublicKey,
-      invoice.amount.toString(),
+      // The QR embeds the same stroop string the verifier compares —
+      // `toString()` would emit `1e-7` for small amounts and fail the URI.
+      canonicalAmount(invoice.amount) ?? invoice.amount.toString(),
       invoice.assetCode || 'XLM',
       invoice.memo,
       invoice.assetIssuer,
