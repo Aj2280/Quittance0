@@ -71,6 +71,9 @@ export function createInvoiceRouter(options: InvoiceRouterOptions): Router {
 
   router.get('/invoices/:id', handlers.getInvoice);
 
+  // GET /invoices/:id/events - seller-scoped audit feed (issue #515)
+  router.get('/invoices/:id/events', handlers.getPaymentEvents);
+
   // GET /invoices/:id/payment-info - Payment info (no rate limit, needed for checkout)
   router.get('/invoices/:id/payment-info', handlers.getPaymentInfo);
 

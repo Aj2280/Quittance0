@@ -94,6 +94,15 @@ export const invoiceApi = {
     return response.data;
   },
 
+  // Seller-only audit feed (issue #515): rejected verifies and monitor
+  // rejections for this invoice. Requires the invoice's own seller key.
+  getPaymentEvents: async (id: string, sellerPublicKey: string) => {
+    const response = await api.get(`/invoices/${id}/events`, {
+      params: { sellerPublicKey },
+    });
+    return response.data;
+  },
+
   // One proof path (issue #517): the seller key and the Freighter signature
   // over `cancel:<id>` travel in the request body — never in query or header.
   cancel: async (id: string, sellerPublicKey: string, signature?: string) => {

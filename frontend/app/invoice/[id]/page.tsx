@@ -22,6 +22,7 @@ import ApiErrorState from '@/components/ApiErrorState';
 import { effectiveInvoiceStatus } from '@/lib/invoice-lifecycle';
 import { invoiceWorkspaceAccess } from '@/lib/invoice-workspace-access';
 import InvoiceTimeline from '@/components/InvoiceTimeline';
+import PaymentEventsFeed from '@/components/PaymentEventsFeed';
 import { invoiceSharePath } from '@/lib/invoice-share-path';
 import { shareInvoiceByEmail } from '@/lib/export';
 import { EXPECTED_WALLET_NETWORK, signInvoiceCancelMessage } from '@/lib/stellar';
@@ -506,6 +507,10 @@ export default function InvoiceDetailPage() {
           <div className="mt-6 sm:mt-8">
             <InvoiceTimeline invoice={invoice} now={lifecycleNow} />
           </div>
+
+          {activeWallet && invoice.sellerPublicKey === activeWallet && (
+            <PaymentEventsFeed invoiceId={invoice.id} sellerPublicKey={activeWallet} />
+          )}
         </main>
       </div>
     </div>

@@ -9,7 +9,7 @@ import {
   type LatePaymentWarningCode,
   type SettlementContext,
 } from '../domain/invoice-settlement';
-import type { MarkAsPaidOptions } from '../storage/invoice-storage';
+import type { MarkAsPaidOptions, PaymentEventRecord } from '../storage/invoice-storage';
 
 // PostgreSQL invoice service. Kept behaviourally identical to
 // InvoiceMemoryService so callers that go through the shared InvoiceStorage
@@ -340,6 +340,27 @@ export class InvoiceService {
     const result = await this.db.query(query, [now]);
     console.log(`⏰ Marked ${result.rowCount} invoices as expired`);
     return result.rowCount || 0;
+  }
+
+  /**
+   * Read the payment_events audit feed for one invoice, oldest first
+   * (issue #515). Callers authorize before exposing rows.
+   */
+  async getPaymentEvents(invoiceId: string): Promise<PaymentEventRecord[]> {
+    const query = `
+      SELECT id, invoice_id, event_type, event_data, created_at
+      FROM payment_events
+      WHERE invoice_id = $1
+      ORDER BY created_at ASC, id ASC
+    `;
+    const result = await this.db.query(query, [invoiceId]);
+    return result.rows.map((row: any) => ({
+      id: row.id,
+      invoiceId: row.invoice_id,
+      eventType: row.event_type,
+      eventData: row.event_data ?? null,
+      createdAt: row.created_at,
+    }));
   }
 
   /**
