@@ -9,6 +9,7 @@
  */
 
 import { buildHorizonTxUrl } from '../utils/explorer-tx-link';
+import { explorerSegmentFor, resolveStellarNetwork } from '../../../shared/network';
 
 export const QUITTANCE_PROOF_VERSION = 'quittance.v1';
 
@@ -121,7 +122,11 @@ function normalizeAmount(value: string | number | null | undefined): string | nu
 }
 
 function normalizeNetwork(network: string | null | undefined): 'testnet' | 'public' {
-  return String(network ?? '').toLowerCase() === 'testnet' ? 'testnet' : 'public';
+  const resolved = String(network ?? '').trim().toLowerCase();
+  if (resolved === 'testnet' || resolved === 'public') return resolved;
+  // An absent or unrecognised hint falls back to the server's resolved
+  // network — the only network this process can actually verify on.
+  return explorerSegmentFor(resolveStellarNetwork(process.env.STELLAR_NETWORK));
 }
 
 function isSettled(status: string): boolean {
@@ -152,7 +157,7 @@ export function buildQuittanceProof(
   }
 
   const status = typeof input.status === 'string' ? input.status : 'PENDING';
-  const network = normalizeNetwork(options.network ?? 'testnet');
+  const network = normalizeNetwork(options.network);
   const settled = isSettled(status);
 
   let txHash: string | null = null;

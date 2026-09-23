@@ -26,6 +26,25 @@ export interface MonitorInvoiceService {
   markAsPaid: InvoiceService['markAsPaid'];
   markExpiredInvoices: InvoiceService['markExpiredInvoices'];
   logPaymentEvent: InvoiceService['logPaymentEvent'];
+  /**
+   * PENDING invoices to re-watch after a restart (issue #502). Scoped to the
+   * monitor account when one is configured; bounded by `limit`.
+   */
+  listPendingInvoices?(
+    sellerPublicKey: string | undefined,
+    limit: number
+  ): Promise<WatchedInvoiceSeed[]>;
+}
+
+export interface WatchedInvoiceSeed {
+  id: string;
+  memo: string;
+  sellerPublicKey?: string;
+  status?: string;
+  amount?: number | string;
+  assetCode?: string;
+  assetIssuer?: string;
+  expiresAt?: Date | string;
 }
 
 export interface WatchedInvoice {
@@ -66,6 +85,9 @@ export interface PaymentMonitorOptions {
   checkpoints?: PaymentMonitorCheckpointStore;
   database?: Queryable;
 }
+
+/** Bounded hydrate pass — a restart must never replay unbounded history. */
+const HYDRATE_WATCH_LIMIT = 500;
 
 function defaultCheckpointStore(database?: Queryable): PaymentMonitorCheckpointStore {
   const cursorFile = process.env.PAYMENT_MONITOR_CURSOR_FILE?.trim();
@@ -149,16 +171,7 @@ export class PaymentMonitorService {
   /**
    * Register an invoice watch as it becomes PENDING.
    */
-  registerWatch(invoice: {
-    id: string;
-    memo: string;
-    sellerPublicKey?: string;
-    status?: string;
-    amount?: number | string;
-    assetCode?: string;
-    assetIssuer?: string;
-    expiresAt?: Date | string;
-  }): void {
+  registerWatch(invoice: WatchedInvoiceSeed): void {
     if (!invoice || !invoice.id) return;
 
     const status = invoice.status || 'PENDING';
@@ -235,6 +248,33 @@ export class PaymentMonitorService {
     return this.watchedInvoices.has(invoiceId);
   }
 
+  /**
+   * Re-registers watches for invoices that were PENDING when the process last
+   * died (issue #502). Bounded by HYDRATE_WATCH_LIMIT and scoped to the
+   * monitor account when one is configured; in MVP memory mode an absent
+   * account lists all pending. Runs before the first poll so a payment that
+   * landed while the process was down still settles — and can only settle
+   * once, because settlement stays keyed on the invoice memo + tx hash.
+   */
+  private async hydrateWatches(): Promise<void> {
+    if (!this.invoices.listPendingInvoices) return;
+    const pending = await this.invoices.listPendingInvoices(
+      this.account,
+      HYDRATE_WATCH_LIMIT
+    );
+    let restored = 0;
+    for (const invoice of pending) {
+      if (invoice && invoice.id) {
+        this.registerWatch(invoice);
+        restored += 1;
+      }
+    }
+    this.pruneExpiredWatches();
+    if (restored > 0) {
+      console.info(`[payment-monitor] Restored ${restored} pending invoice watch(es) from storage`);
+    }
+  }
+
   start() {
     if (this.isRunning) return;
     if (!this.account) throw new Error('Payment monitor requires SELLER_PUBLIC_KEY');
@@ -253,7 +293,15 @@ export class PaymentMonitorService {
         console.error('Error checking expired invoices:', error);
       });
     }, 60_000);
-    this.schedule(0);
+    // Hydrate before the first poll: a payment that landed during downtime
+    // must find its watch already registered.
+    void this.hydrateWatches()
+      .catch((error) => {
+        console.error('[payment-monitor] Watch hydration failed:', error);
+      })
+      .finally(() => {
+        if (this.isRunning) this.schedule(0);
+      });
   }
 
   stop() {

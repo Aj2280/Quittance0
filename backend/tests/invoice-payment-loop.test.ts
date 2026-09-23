@@ -152,6 +152,9 @@ async function createInvoice(port: number, amount = 25) {
     },
     {
       'x-forwarded-for': `203.0.113.${++createRequestSequence}`,
+      // Each helper call is a distinct create intent; identical bodies inside
+      // the dedupe window would otherwise return the same invoice (#514).
+      'idempotency-key': `loop-${createRequestSequence}`,
     }
   );
 
@@ -233,8 +236,15 @@ describe('invoice payment loop', () => {
     });
 
     assert.equal(verified.status, 200);
-    assert.equal(verified.body.data.payerName, 'Ada Lovelace');
-    assert.equal(verified.body.data.payerEmail, 'ada@example.com');
+    // Payer identity is workspace-scoped (#503): read it back through the
+    // seller view rather than the public verify response.
+    const stored = await jsonRequest(
+      port,
+      'GET',
+      `/api/invoices/${invoice.id}?sellerPublicKey=${SELLER}`
+    );
+    assert.equal(stored.body.data.payerName, 'Ada Lovelace');
+    assert.equal(stored.body.data.payerEmail, 'ada@example.com');
   });
 
   it('refuses a transaction whose memo belongs to another invoice', async () => {

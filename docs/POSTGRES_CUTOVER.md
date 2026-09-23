@@ -1,7 +1,8 @@
 # In-memory to Postgres cutover
 
-Status: proposed. This document designs the cutover; it does not activate or
-deploy a migration.
+Status: implemented. The dual-backend entrypoint (`server-dual.ts`) is now live.
+See [Issue #452](https://github.com/Kappa16/Quittance0/issues/452) for the
+implementation PR.
 
 ## Decision
 
@@ -10,15 +11,17 @@ single release boundary. It will not dual-write. The Postgres database is
 loaded and verified before traffic moves, then becomes the only source of truth.
 
 Local development keeps the existing npm run dev:mvp command and in-memory
-adapter. Persistent environments use the full server with DATABASE_URL. A
-future unified entrypoint may expose INVOICE_STORAGE=memory or postgres, but
-the current separate commands are already an explicit, low-risk flag:
+adapter. Persistent environments use the full server with DATABASE_URL. The
+`server-dual.ts` unified entrypoint honours the `INVOICE_STORAGE` env variable
+to make the selection explicit:
 
-| Environment | Command | Storage | Expected loss after restart |
-| --- | --- | --- | --- |
-| Local UI work | npm run dev:mvp | memory | accepted |
-| Ephemeral demo | npm run dev:mvp | memory | accepted only when disclosed |
-| Shared demo or production | npm run dev | Postgres | none after committed write |
+| Environment | Command | INVOICE_STORAGE | Storage | Expected loss after restart |
+| --- | --- | --- | --- | --- |
+| Local UI work | npm run dev:mvp | (unset) | memory | accepted |
+| Local UI work (dual) | npm run dev:dual | (unset) | memory (auto) | accepted |
+| Local Postgres dev | npm run dev:dual | postgres | PostgreSQL | none |
+| Ephemeral demo | npm run dev:mvp | (unset) | memory | accepted only when disclosed |
+| Shared demo or production | npm run dev:dual | postgres | PostgreSQL | none after committed write |
 
 A public demo can accept loss of invoices created since its last restart. Any
 URL created before a planned production cutover has a zero-loss requirement:
@@ -26,6 +29,128 @@ freeze writes, export the live process, import once, verify, then route traffic.
 If the memory process cannot export its current map, those links cannot be
 recovered after the process stops. The cutover must therefore happen before
 that stop.
+
+---
+
+## Empty-database boot (Issue #452 — Requirement 15)
+
+Use this procedure when booting against a fresh PostgreSQL database for the
+first time, or when provisioning a new environment.
+
+### 1. Provision the database
+
+Create a PostgreSQL database and capture its connection string:
+
+```bash
+createdb quittance
+# or, in any Postgres environment:
+psql -c "CREATE DATABASE quittance;"
+```
+
+Set the connection string in `backend/.env`:
+
+```
+DATABASE_URL=postgresql://user:password@localhost:5432/quittance
+INVOICE_STORAGE=postgres
+```
+
+### 2. Apply the schema (idempotent)
+
+```bash
+cd backend
+npm run db:migrate
+```
+
+The migration script (`db/schema.sql`) creates the invoices, transactions,
+payment_events, and payment_monitor_checkpoints tables; adds all required
+indexes; and adds the `payment_tx_hash` uniqueness constraint.  Re-running the
+migration on an existing database is safe — every `CREATE TABLE`, `ALTER TABLE`,
+and `CREATE INDEX` statement uses `IF NOT EXISTS`.
+
+### 3. Verify the schema applied cleanly
+
+```bash
+psql "$DATABASE_URL" -c "\dt"
+# Expected: invoices, transactions, payment_events, payment_monitor_checkpoints
+```
+
+### 4. Start the server
+
+```bash
+# Development (tsx watch):
+npm run dev:dual
+
+# Production (requires a prior npm run build):
+npm run start:dual:prod
+```
+
+The server logs `Storage: PostgreSQL` on boot.  Health and readiness endpoints:
+
+- `GET /api/health` → liveness (always 200)
+- `GET /api/ready` → readiness (503 if critical config is missing)
+
+### 5. Smoke test on the empty database
+
+```bash
+# Create one invoice, read it back, verify health and readiness:
+DEPLOY_API_URL=http://localhost:3001/api node ../scripts/deploy-smoke.mjs
+```
+
+An empty database is fully valid.  No seed data is required for the server to
+start or pass its readiness probe.
+
+Optionally load the demo seed to see wallet-scoped data in the dashboard:
+
+```bash
+npm run db:seed
+```
+
+---
+
+## Rollback to in-memory MVP (Issue #452 — Requirement 15)
+
+These instructions switch an environment back to the in-memory backend without
+touching the PostgreSQL database.
+
+### Option A — set INVOICE_STORAGE=memory
+
+If you are using `server-dual.ts` (the unified entrypoint), set the env variable:
+
+```
+INVOICE_STORAGE=memory
+```
+
+Restart the server.  The Postgres connection pool is never opened.  Invoices
+created in memory will be lost on the next restart, which is the documented
+behaviour of the memory backend.
+
+### Option B — run the MVP-only entrypoint
+
+Switch the start command to the in-memory-only server:
+
+```bash
+npm run dev:mvp       # development
+npm run start:mvp:prod  # production
+```
+
+No environment changes are required.  The MVP server does not read
+`INVOICE_STORAGE` and never opens a database connection.
+
+### What happens to existing Postgres data after rollback?
+
+The PostgreSQL database is not touched by the rollback.  Rows remain intact.
+If you later re-enable Postgres, the same invoices reappear — including their
+original `/pay/[id]` public identifiers.
+
+**Do not route traffic back to a writable memory instance after Postgres has
+accepted writes.**  That would fork invoice IDs and payment state.  The only
+safe sequence is:
+
+1. Disable writes to the Postgres server (drain mode or maintenance page).
+2. Decide whether to keep Postgres as the source of truth, or
+3. Accept that in-memory invoices created since the last cutover are lost on restart.
+
+---
 
 ## Public identity contract
 

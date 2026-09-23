@@ -7,12 +7,12 @@
 import { Request, Response } from 'express';
 import stellarService from '../services/stellar.service';
 import {
-  cancelInvoiceSchema,
   createInvoiceFieldErrors,
   createInvoiceSchema,
   stellarPublicKeySchema,
 } from '../utils/validation';
 import { firstCreateInvoiceMessage } from '../../../shared/invoice-validation';
+import { toPublicInvoiceDto } from '../../../shared/invoice';
 import { generatePaymentQR, generateStellarPaymentQR } from '../utils/qrcode';
 import {
   sendFailure,
@@ -36,10 +36,13 @@ import {
   warningForLatePayment,
 } from '../domain/invoice-settlement';
 import { cutoverDrainMode, simulationAllowed } from '../config/runtime';
+import { idempotencyKeyForCreate } from '../utils/idempotency';
 import { createRequestId } from '../utils/request-correlation-id';
 import { checkInvoiceVerifyLimit } from '../middleware/rate-limit';
 import { cacheVerificationResult } from '../middleware/verify-cache';
 import { verifySellerSignature } from '../utils/signature-verification';
+import { isHorizonUnavailable } from '../utils/horizon-client';
+import { redactPaymentEventData } from '../utils/payment-event-redaction';
 
 /** Kept explicit so clients can tune polling without duplicating backend policy. */
 export const PAYMENT_STATUS_POLL_INTERVAL_MS = 3000;
@@ -68,6 +71,7 @@ export interface InvoiceHandlerOptions {
 export interface InvoiceHandlers {
   createInvoice(req: Request, res: Response): Promise<void>;
   getInvoice(req: Request, res: Response): Promise<void>;
+  getPaymentEvents(req: Request, res: Response): Promise<void>;
   getInvoices(req: Request, res: Response): Promise<void>;
   getPaymentInfo(req: Request, res: Response): Promise<void>;
   cancelInvoice(req: Request, res: Response): Promise<void>;
@@ -160,6 +164,17 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         if (validatedData.network && validatedData.network !== STELLAR_NETWORK) {
           return sendFailure(res, 400, 'Client wallet network does not match the server Stellar network');
         }
+        // Issue #514: prefer the caller's Idempotency-Key header; fall back to
+        // a derived signature inside its short window so even keyless retries
+        // cannot mint a second pay link for the same intent.
+        const headerKey = req.headers?.['idempotency-key'];
+        if (typeof headerKey === 'string' && headerKey) {
+          if (headerKey.length > 200 || !/^[A-Za-z0-9_:\-]+$/.test(headerKey)) {
+            return sendFailure(res, 400, 'Idempotency-Key header is invalid');
+          }
+          validatedData.idempotencyKey = headerKey;
+        }
+        validatedData.idempotencyKey = idempotencyKeyForCreate(validatedData);
         const invoice = await storage.createInvoice(validatedData);
         options.paymentMonitor?.registerWatch(invoice);
         const payment = await buildPaymentPayload(invoice);
@@ -186,7 +201,23 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           return sendFailure(res, 404, 'Invoice not found');
         }
 
-        sendSuccess(res, 200, invoice);
+        // #503: two shapes from one record. The workspace (seller) fields —
+        // customer contact, seller profile, payer identity, settlement
+        // internals — only leave the server when the caller proves ownership
+        // by presenting the invoice's own seller key. Everyone else gets the
+        // public pay DTO.
+        const sellerKey = req.query.sellerPublicKey;
+        if (sellerKey !== undefined) {
+          const parsed = stellarPublicKeySchema.safeParse(sellerKey);
+          if (!parsed.success) {
+            return sendFailure(res, 400, 'sellerPublicKey must be a valid Stellar public key');
+          }
+          if (parsed.data === invoice.sellerPublicKey) {
+            return sendSuccess(res, 200, invoice);
+          }
+        }
+
+        sendSuccess(res, 200, toPublicInvoiceDto(invoice));
       } catch (error: any) {
         logError('Get invoice error:', error);
         sendFailure(res, 500, error.message || 'Failed to get invoice');
@@ -224,6 +255,46 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
       }
     },
 
+    /**
+     * Seller-only audit feed for one invoice (issue #515). The workspace
+     * timeline otherwise shows status timestamps only — a rejected
+     * underpayment or foreign transaction never appears. The seller key
+     * scopes the read the same way the cancel proof does: present the
+     * invoice's own key or get nothing.
+     */
+    async getPaymentEvents(req: Request, res: Response) {
+      try {
+        const invoice = await storage.getInvoiceById(req.params.id);
+        if (!invoice) {
+          return sendFailure(res, 404, 'Invoice not found');
+        }
+
+        const sellerCheck = stellarPublicKeySchema.safeParse(req.query.sellerPublicKey);
+        if (!sellerCheck.success) {
+          return sendFailure(res, 400, 'sellerPublicKey query parameter is required and must be a valid Stellar public key');
+        }
+        if (sellerCheck.data !== invoice.sellerPublicKey) {
+          return sendFailure(res, 403, 'Forbidden: not the seller of this invoice');
+        }
+
+        const events = (await storage.getPaymentEvents?.(invoice.id)) ?? [];
+        sendSuccess(
+          res,
+          200,
+          events.map((event) => ({
+            id: event.id,
+            invoiceId: event.invoiceId,
+            eventType: event.eventType,
+            eventData: redactPaymentEventData(event.eventData),
+            createdAt: event.createdAt,
+          }))
+        );
+      } catch (error: any) {
+        logError('Get payment events error:', error);
+        sendFailure(res, 500, error.message || 'Failed to get payment events');
+      }
+    },
+
     async getPaymentInfo(req: Request, res: Response) {
       try {
         const invoice = await storage.getInvoiceById(req.params.id);
@@ -234,7 +305,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
 
         const payment = await buildPaymentPayload(invoice);
 
-        sendSuccess(res, 200, { ...payment, invoice });
+        sendSuccess(res, 200, { ...payment, invoice: toPublicInvoiceDto(invoice) });
       } catch (error: any) {
         logError('Get payment info error:', error);
         sendFailure(res, 500, error.message || 'Failed to get payment info');
@@ -243,47 +314,46 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
 
     async cancelInvoice(req: Request, res: Response): Promise<void> {
       try {
+        // Issue #517 — one proof path: the seller key, signature and message
+        // all travel in the JSON body. Query params and headers are legacy
+        // transports; when they carry a key that disagrees with the body the
+        // request is ambiguous and fails closed.
+        const bodyKeyRaw = req.body?.sellerPublicKey;
+        const queryKeyRaw = req.query?.sellerPublicKey;
+        const headerKeyRaw = req.headers?.['x-seller-public-key'];
+        const alternates = [queryKeyRaw, headerKeyRaw]
+          .flat()
+          .filter((v): v is string => typeof v === 'string' && v.trim() !== '');
+
         let sellerPublicKey: string | undefined;
-        let signature: string | undefined;
-
-        if (req.body && typeof req.body === 'object') {
-          if ('sellerPublicKey' in req.body) {
-            const parsed = cancelInvoiceSchema.safeParse(req.body);
-            if (!parsed.success) {
-              sendFailure(res, 400, 'Invalid Stellar public key format');
-              return;
-            }
-            sellerPublicKey = parsed.data.sellerPublicKey;
-          }
-          if ('signature' in req.body && typeof req.body.signature === 'string') {
-            signature = req.body.signature;
-          }
-        }
-
-        if (!sellerPublicKey && req.query.sellerPublicKey) {
-          const parsed = stellarPublicKeySchema.safeParse(req.query.sellerPublicKey);
+        if (typeof bodyKeyRaw === 'string' && bodyKeyRaw.trim() !== '') {
+          const parsed = stellarPublicKeySchema.safeParse(bodyKeyRaw);
           if (!parsed.success) {
-            sendFailure(res, 400, 'Invalid Stellar public key format');
-            return;
+            return sendFailure(res, 400, 'Invalid Stellar public key format');
           }
+          sellerPublicKey = parsed.data;
+        }
 
-          // Fallback to claimed key (legacy, insecure)
-          if (req.body && typeof req.body === 'object' && 'sellerPublicKey' in req.body) {
-            const parsed = cancelInvoiceSchema.safeParse(req.body);
-            if (!parsed.success) {
-              return sendFailure(res, 400, 'Invalid Stellar public key format');
+        if (alternates.length > 0) {
+          if (!sellerPublicKey) {
+            return sendFailure(
+              res,
+              400,
+              'Send sellerPublicKey in the request body; query and header keys are not accepted'
+            );
+          }
+          for (const alt of alternates) {
+            const parsed = stellarPublicKeySchema.safeParse(alt);
+            if (!parsed.success || parsed.data !== sellerPublicKey) {
+              return sendFailure(
+                res,
+                400,
+                'Conflicting sellerPublicKey values between body, query, and header'
+              );
             }
-            sellerPublicKey = parsed.data.sellerPublicKey;
-          } else if (req.query.sellerPublicKey) {
-            const parsed = stellarPublicKeySchema.safeParse(req.query.sellerPublicKey);
-            if (!parsed.success) {
-              return sendFailure(res, 400, 'Invalid Stellar public key format');
-            }
-            sellerPublicKey = parsed.data;
           }
         }
 
-        // Require explicit ownership proof (no more unauthenticated cancellation)
         if (!sellerPublicKey) {
           return sendFailure(
             res,
@@ -292,64 +362,42 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           );
         }
 
-        if (!sellerPublicKey && req.headers?.['x-seller-public-key']) {
-          const headerKey = req.headers['x-seller-public-key'];
-          const parsed = stellarPublicKeySchema.safeParse(Array.isArray(headerKey) ? headerKey[0] : headerKey);
-          if (parsed.success) {
-            sellerPublicKey = parsed.data;
-          }
-        }
+        const signature =
+          typeof req.body?.signature === 'string' && req.body.signature.trim() !== ''
+            ? req.body.signature
+            : undefined;
 
-        if (!signature && req.headers?.['x-signature']) {
-          const headerSig = req.headers['x-signature'];
-          signature = Array.isArray(headerSig) ? headerSig[0] : headerSig;
-        }
-
+        // Signature is required in production and whenever the operator opts
+        // in; the bypass exists for local dev/tests only (documented in
+        // README — "Cancel authorization").
         const requireSignature =
-          options.requireCancelSignature ?? (process.env.REQUIRE_CANCEL_SIGNATURE === 'true');
+          options.requireCancelSignature ??
+          (process.env.REQUIRE_CANCEL_SIGNATURE === 'true' ||
+            process.env.NODE_ENV === 'production');
 
-        if (requireSignature) {
-          if (!sellerPublicKey || !signature) {
-            res.status(401).json({
-              success: false,
-              code: 'UNAUTHORIZED',
-              error: 'Cancellation requires seller proof of ownership (signature)',
-            });
-            return;
-          }
+        if (requireSignature && !signature) {
+          res.status(401).json({
+            success: false,
+            code: 'UNAUTHORIZED',
+            error: 'Cancellation requires a Freighter signature over cancel:<invoiceId>',
+          });
+          return;
         }
 
         if (signature) {
-          if (!sellerPublicKey) {
-            res.status(401).json({
-              success: false,
-              code: 'UNAUTHORIZED',
-              error: 'Seller public key is required when providing a signature',
-            });
-            return;
-          }
-
           const existingInvoice = await storage.getInvoiceById(req.params.id);
           if (!existingInvoice) {
-            sendFailure(res, 404, 'Invoice not found');
-            return;
+            return sendFailure(res, 404, 'Invoice not found');
           }
 
           if (existingInvoice.sellerPublicKey !== sellerPublicKey) {
-            res.status(401).json({
-              success: false,
-              code: 'UNAUTHORIZED',
-              error: 'Signer is not the seller of this invoice',
-            });
-            return;
+            return sendFailure(res, 403, 'Signer is not the seller of this invoice');
           }
 
-          const candidateMessages = [req.params.id, `cancel:${req.params.id}`];
-          if (req.body?.message && typeof req.body.message === 'string') {
-            candidateMessages.push(req.body.message);
-          }
-
-          const isValid = verifySellerSignature(sellerPublicKey, signature, candidateMessages);
+          // One canonical message — the wallet signs exactly `cancel:<id>`.
+          const isValid = verifySellerSignature(sellerPublicKey, signature, [
+            `cancel:${req.params.id}`,
+          ]);
           if (!isValid) {
             res.status(401).json({
               success: false,
@@ -420,6 +468,13 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           txDetails = await stellar.getTransaction(hashCheck.value);
         } catch (error: any) {
           logError('Verify payment lookup error:', error);
+          if (isHorizonUnavailable(error)) {
+            // Horizon is overloaded or unreachable. A 503 invites the payer to
+            // retry; it is never cached — caching an outage as a rejection
+            // would poison the hash against later retries.
+            const unavailable = failure('VERIFY_UNAVAILABLE');
+            return sendVerificationFailure(res, 503, unavailable.code, unavailable.error);
+          }
           const notFound = failure('TRANSACTION_NOT_FOUND');
           // Cache the rejection to prevent repeated Horizon lookups for invalid hashes
           await cacheVerificationResult(id, hashCheck.value, 'rejected', notFound.code);
@@ -444,6 +499,20 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         if (!verification.ok) {
           // Cache verification failures to prevent repeated attempts
           await cacheVerificationResult(id, hashCheck.value, 'rejected', verification.code);
+          // Issue #515: a rejected verify lands on the seller's audit feed with
+          // the same taxonomy the monitor uses, so "still PENDING" answers
+          // itself without the payer having to say so.
+          await storage.logPaymentEvent?.(
+            id,
+            verification.code === 'AMOUNT_TOO_LOW' || verification.code === 'AMOUNT_MISMATCH'
+              ? 'PARTIAL_PAYMENT'
+              : 'PAYMENT_REJECTED',
+            {
+              code: verification.code,
+              txHash: hashCheck.value,
+              source: 'manual-verify',
+            }
+          ).catch(() => undefined);
           return sendVerificationFailure(res, 400, verification.code, verification.error);
         }
 
@@ -504,7 +573,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
           throw error;
         }
 
-        sendSuccess(res, 200, updatedInvoice, {
+        sendSuccess(res, 200, toPublicInvoiceDto(updatedInvoice), {
           message: 'Payment verified on Stellar',
           code: updatedInvoice.latePaymentWarningCode,
           warning: updatedInvoice.latePaymentWarningCode
@@ -574,7 +643,7 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         });
         options.paymentMonitor?.unregisterWatch(id);
 
-        sendSuccess(res, 200, updatedInvoice, { message: 'Payment simulated successfully' });
+        sendSuccess(res, 200, toPublicInvoiceDto(updatedInvoice), { message: 'Payment simulated successfully' });
       } catch (error: any) {
         logError('Simulate payment error:', error);
         sendFailure(res, 500, error.message || 'Failed to simulate payment');

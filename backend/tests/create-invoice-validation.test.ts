@@ -187,7 +187,12 @@ describe('create-invoice endpoint - the refusal names its fields', () => {
       handlers.createInvoice as any,
       createReq({ body: { ...payload(), memo: 'INV-CLIENT-SUPPLIED' } })
     );
-    const plain = await call(handlers.createInvoice as any, createReq({ body: payload() }));
+    // A distinct create intent — identical unsigned replays collapse onto the
+    // first invoice now (issue #514), so the second create differs on purpose.
+    const plain = await call(
+      handlers.createInvoice as any,
+      createReq({ body: payload({ customerEmail: 'second@client.example' }) })
+    );
 
     assert.equal(withClientMemo.statusCode, 201, JSON.stringify(withClientMemo.body));
     assert.equal(plain.statusCode, 201, JSON.stringify(plain.body));
