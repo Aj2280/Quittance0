@@ -4,6 +4,7 @@ import {
   isConnected,
   getPublicKey,
   signTransaction,
+  signBlob,
   isAllowed,
   setAllowed,
   getNetwork,
@@ -481,6 +482,29 @@ export const streamPayments = (
     });
 
   return closeHandler;
+};
+
+/**
+ * The one seller-proof message for cancel (issue #517): the connected wallet
+ * signs exactly `cancel:<invoiceId>` — one canonical message on one canonical
+ * transport (the request body), so a stale query param or header cannot
+ * smuggle a different seller key past the gate.
+ */
+export const CANCEL_INVOICE_MESSAGE_PREFIX = 'cancel:';
+
+export const signInvoiceCancelMessage = async (
+  invoiceId: string
+): Promise<{ publicKey: string; signature: string }> => {
+  const session = await assertFreighterReady();
+  const message = `${CANCEL_INVOICE_MESSAGE_PREFIX}${invoiceId}`;
+  // ASCII-only message, so btoa is a safe UTF-8→base64 step here.
+  const signed = await signBlob(btoa(message), { accountToSign: session.publicKey! });
+  const signature = readResultString(signed as any, ['signedBlob', 'signature']) ||
+    (typeof signed === 'string' ? signed : null);
+  if (!signature) {
+    throw new Error('Freighter did not return a cancel signature');
+  }
+  return { publicKey: session.publicKey!, signature };
 };
 
 /**
