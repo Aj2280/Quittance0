@@ -12,12 +12,30 @@ import { Request, Response } from 'express';
 import { buildQuittanceProof, serializeQuittanceProof, checkQuittanceProofInvariants } from '../services/quittance-proof.service';
 import { sendSuccess, sendFailure } from '../types/api';
 import { createRequestId } from '../utils/request-correlation-id';
+import { STELLAR_NETWORK } from '../config/stellar';
+
+/**
+ * The network a proof claims is the network this server creates, pays and
+ * verifies invoices on — never a caller hint. A `?network=` query that does
+ * not match fails closed rather than producing a proof that cannot verify.
+ */
+function resolveProofNetwork(queryNetwork: unknown): string | null {
+  if (queryNetwork === undefined || queryNetwork === null || queryNetwork === '') {
+    return STELLAR_NETWORK.toLowerCase();
+  }
+  return String(queryNetwork).toLowerCase() === STELLAR_NETWORK.toLowerCase()
+    ? STELLAR_NETWORK.toLowerCase()
+    : null;
+}
 
 export async function getQuittanceProof(req: Request, res: Response): Promise<void> {
   const requestId = createRequestId();
   try {
     const { id } = req.params;
-    const network = req.query.network as string | undefined;
+    const network = resolveProofNetwork(req.query.network);
+    if (network === null) {
+      return sendFailure(res, 400, `Proofs are issued on ${STELLAR_NETWORK.toLowerCase()} for this server`);
+    }
 
     // Fetch invoice from storage
     const invoice = await req.app.get('invoiceStorage').getInvoiceById(id);
@@ -41,6 +59,9 @@ export async function getQuittanceProof(req: Request, res: Response): Promise<vo
         createdAt: invoice.createdAt,
         expiresAt: invoice.expiresAt,
         paidAt: invoice.paidAt,
+        settledAt: invoice.settledAt,
+        settlementContext: invoice.settlementContext,
+        latePaymentWarningCode: invoice.latePaymentWarningCode,
       },
       { network }
     );
@@ -74,7 +95,10 @@ export async function getQuittanceProofPDF(req: Request, res: Response): Promise
   const requestId = createRequestId();
   try {
     const { id } = req.params;
-    const network = req.query.network as string | undefined;
+    const network = resolveProofNetwork(req.query.network);
+    if (network === null) {
+      return sendFailure(res, 400, `Proofs are issued on ${STELLAR_NETWORK.toLowerCase()} for this server`);
+    }
 
     // Fetch invoice from storage
     const invoice = await req.app.get('invoiceStorage').getInvoiceById(id);
@@ -98,6 +122,9 @@ export async function getQuittanceProofPDF(req: Request, res: Response): Promise
         createdAt: invoice.createdAt,
         expiresAt: invoice.expiresAt,
         paidAt: invoice.paidAt,
+        settledAt: invoice.settledAt,
+        settlementContext: invoice.settlementContext,
+        latePaymentWarningCode: invoice.latePaymentWarningCode,
       },
       { network }
     );

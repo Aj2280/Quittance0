@@ -209,11 +209,38 @@ export function cutoverDrainMode(env: RuntimeEnvironment = process.env): boolean
   return env.CUTOVER_DRAIN_MODE === 'true' || env.DRAIN_MODE === 'true';
 }
 
+/**
+ * Resolve the active storage backend from the environment.
+ *
+ * Selection rules (in priority order):
+ *  1. INVOICE_STORAGE=memory   → always in-memory, even if DATABASE_URL is set.
+ *  2. INVOICE_STORAGE=postgres → PostgreSQL; throws immediately if DATABASE_URL
+ *                                is absent so the misconfiguration surfaces at
+ *                                boot instead of at the first database call.
+ *  3. (unset / other)          → postgres when DATABASE_URL is present, else
+ *                                memory. This preserves backward compatibility
+ *                                for callers that set only DATABASE_URL.
+ *
+ * The check must never silently fall back from an explicitly requested Postgres
+ * mode to memory, because that would give operators false confidence that their
+ * data is persisted.
+ */
 export function configuredStorageMode(
   env: RuntimeEnvironment = process.env
 ): 'memory' | 'postgres' {
-  if (env.INVOICE_STORAGE === 'memory' || env.INVOICE_STORAGE === 'postgres') {
-    return env.INVOICE_STORAGE;
+  if (env.INVOICE_STORAGE === 'memory') {
+    return 'memory';
   }
+  if (env.INVOICE_STORAGE === 'postgres') {
+    if (!env.DATABASE_URL) {
+      throw new Error(
+        'INVOICE_STORAGE=postgres requires DATABASE_URL to be set. ' +
+        'Provide a valid PostgreSQL connection string or set INVOICE_STORAGE=memory ' +
+        'to use the in-memory backend.'
+      );
+    }
+    return 'postgres';
+  }
+  // Implicit selection: postgres when DATABASE_URL is present, memory otherwise.
   return env.DATABASE_URL ? 'postgres' : 'memory';
 }

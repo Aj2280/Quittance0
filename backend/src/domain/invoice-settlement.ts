@@ -20,6 +20,7 @@ export interface SettlementFields {
 export interface SettlementInvoiceState {
   status: InvoiceStatus;
   cancelledAt?: Date | string | null;
+  expiresAt?: Date | string | null;
 }
 
 export class SettlementTimeUnavailableError extends Error {
@@ -73,8 +74,18 @@ export function settlementFieldsForInvoice(
     };
   }
 
+  // PENDING or EXPIRED: the ledger close time, not the detection time, decides
+  // whether the payment landed inside the invoice's lifetime.
+  const expiresAt = parseSettlementTime(invoice.expiresAt);
+  const afterExpiry = expiresAt
+    ? settledAt.getTime() >= expiresAt.getTime()
+    : invoice.status === 'EXPIRED';
+
   return {
     settledAt,
-    settlementContext: 'ON_TIME',
+    settlementContext: afterExpiry ? 'AFTER_EXPIRY' : 'ON_TIME',
+    priorStatus:
+      invoice.status === 'EXPIRED' || afterExpiry ? invoice.status : undefined,
+    latePaymentWarningCode: afterExpiry ? 'PAYMENT_RECEIVED_AFTER_EXPIRY' : undefined,
   };
 }

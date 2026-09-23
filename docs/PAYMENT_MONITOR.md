@@ -43,6 +43,15 @@ selected storage adapter's persistence guarantees.
 
 The payment monitor maintains an active watch registry for pending invoices. Invoices enter the registry when created as PENDING, and are unregistered once settled (PAID), cancelled (CANCELLED), or expired (EXPIRED).
 
+### Restart hydration
+
+Watches are in-memory, so a process restart used to empty the registry until the next `create`. On `start()` the monitor now runs a bounded hydrate pass **before** the first poll (issue #502):
+
+- `listPendingInvoices` loads PENDING invoices from the active storage engine (memory or Postgres), scoped to the monitor account when a fixed seller is configured, otherwise all pending rows in MVP memory.
+- The pass is capped at 500 invoices (`HYDRATE_WATCH_LIMIT`) — hydration never replays unbounded ledger history; the durable cursor remains the page position.
+- Expired rows are transitioned first (`markExpiredInvoices`) and pruned again post-registration, so a lapsed invoice never comes back as a watch.
+- Settlement stays keyed on memo + transaction hash, so a payment that landed during downtime settles exactly once — the PAID state and `processedTxHashes` make any replay harmless.
+
 An incoming operation settles exactly one invoice selected by its unique memo. It then passes the shared verification contract:
 
 - destination equals the invoice seller account;
