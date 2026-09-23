@@ -43,8 +43,8 @@ stateDiagram-v2
 | `PENDING` | `EXPIRED` | 60s sweep, or a read after the deadline | `status = 'PENDING' AND expires_at <= now` | `markExpiredInvoices` / lazy read |
 | `PENDING` | `CANCELLED` | `POST /invoices/:id/cancel` | seller is the invoice owner | handler |
 | `PAID` | - | terminal | | |
-| `EXPIRED` | - | terminal today: verify returns `INVOICE_EXPIRED` | | |
-| `CANCELLED` | - | terminal: verify returns `INVOICE_NOT_PENDING` | | |
+| `EXPIRED` | `PAID` | exact payment settles; ledger close time decides `ON_TIME` vs `AFTER_EXPIRY` | `settledAt >= expiresAt` flags `PAYMENT_RECEIVED_AFTER_EXPIRY` | handler / monitor |
+| `CANCELLED` | `PAID` | exact payment settles; ledger close time decides `ON_TIME` vs `AFTER_CANCEL` | `settledAt >= cancelledAt` flags `PAYMENT_RECEIVED_AFTER_CANCEL` | handler / monitor |
 
 ## The late-payment edge case
 

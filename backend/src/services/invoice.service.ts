@@ -171,23 +171,27 @@ export class InvoiceService {
             paid_at = NOW(),
             payer_name = $4,
             payer_email = $5,
-            settled_at = COALESCE($6::timestamptz, NOW()),
+            settled_at = $6::timestamptz,
             settlement_context = CASE
               WHEN status = 'CANCELLED' AND $6::timestamptz >= cancelled_at THEN 'AFTER_CANCEL'
+              WHEN status = 'CANCELLED' THEN 'ON_TIME'
+              WHEN COALESCE($6::timestamptz >= expires_at, status = 'EXPIRED') THEN 'AFTER_EXPIRY'
               ELSE 'ON_TIME'
             END,
             prior_status = CASE
-              WHEN status = 'CANCELLED' THEN status
+              WHEN status <> 'PENDING' OR COALESCE($6::timestamptz >= expires_at, false) THEN status
               ELSE NULL
             END,
             late_payment_warning_code = CASE
               WHEN status = 'CANCELLED' AND $6::timestamptz >= cancelled_at THEN 'PAYMENT_RECEIVED_AFTER_CANCEL'
+              WHEN status <> 'CANCELLED' AND COALESCE($6::timestamptz >= expires_at, status = 'EXPIRED') THEN 'PAYMENT_RECEIVED_AFTER_EXPIRY'
               ELSE NULL
             END
         WHERE id = $1
+          AND $6::timestamptz IS NOT NULL
           AND (
-            (status = 'PENDING' AND expires_at > NOW())
-            OR (status = 'CANCELLED' AND cancelled_at IS NOT NULL AND $6::timestamptz IS NOT NULL)
+            status IN ('PENDING', 'EXPIRED')
+            OR (status = 'CANCELLED' AND cancelled_at IS NOT NULL)
           )
         RETURNING *
       ),
@@ -222,7 +226,7 @@ export class InvoiceService {
 
       if (result.rows.length === 0) {
         const existing = await this.db.query('SELECT * FROM invoices WHERE id = $1', [invoiceId]);
-        if (existing.rows[0]?.status === 'CANCELLED' && !settledAt) {
+        if (existing.rows.length > 0 && !settledAt) {
           throw new SettlementTimeUnavailableError();
         }
         throw new Error('Invoice not found, expired, or already processed');

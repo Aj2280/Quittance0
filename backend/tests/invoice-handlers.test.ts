@@ -260,7 +260,7 @@ function paymentTransaction(overrides: {
   assetCode?: string;
 }) {
   return {
-    transaction: { memo: overrides.memo },
+    transaction: { memo: overrides.memo, created_at: new Date().toISOString() },
     operations: [
       {
         type: 'payment',
@@ -354,7 +354,7 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       assert.equal(got.body.data.customerEmail, customerEmail);
 
       transaction = {
-        transaction: { memo: created.memo },
+        transaction: { memo: created.memo, created_at: new Date().toISOString() },
         operations: [
           {
             type: 'payment',
@@ -754,7 +754,7 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       }
     });
 
-    it('expires lazily and closes payment, verification, and actionable stats', async () => {
+    it('expires lazily and closes payment issuance and actionable stats', async () => {
       const invoice = await createInvoice({ expiresInDays: 1 });
       await storage.markExpiredInvoices(new Date(new Date(invoice.expiresAt).getTime() + 1));
 
@@ -772,12 +772,15 @@ function runSharedBackendSuite(name: string, createStorage: () => InvoiceStorage
       assert.equal(paymentInfo.body.data.qrCode, null);
       assert.equal(paymentInfo.body.data.stellarQrCode, null);
 
+      // Late payments still settle: verification on an expired invoice proceeds
+      // to the ledger and only rejects because no matching transaction exists.
+      transaction = paymentTransaction({ memo: 'INV-UNRELATED', amount: '42.5000000', to: SELLER_A });
       const verify = await call(
         handlers().verifyPayment,
         createReq({ params: { id: invoice.id }, body: { txHash: TX_HASH } })
       );
       assert.equal(verify.statusCode, 400);
-      assert.equal(verify.body.code, 'INVOICE_EXPIRED');
+      assert.equal(verify.body.code, 'MEMO_MISMATCH');
 
       const stats = await call(
         handlers().getStats,
