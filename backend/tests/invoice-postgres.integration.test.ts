@@ -166,7 +166,7 @@ describe('Invoice persistence on Postgres', { skip: DATABASE_URL ? false : 'DATA
       const txHash = 'a'.repeat(64);
       const payerInfo: PayerInfo = { payerName: 'Grace Hopper', payerEmail: 'grace@example.com' };
 
-      const paid = await service.markAsPaid(created.id, txHash, PAYER, payerInfo);
+      const paid = await service.markAsPaid(created.id, txHash, PAYER, payerInfo, { settledAt: new Date() });
 
       assert.equal(paid.status, 'PAID');
       assert.equal(paid.paymentTxHash, txHash);
@@ -196,7 +196,7 @@ describe('Invoice persistence on Postgres', { skip: DATABASE_URL ? false : 'DATA
       await pool.query("UPDATE invoices SET expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1", [created.id]);
 
       await assert.rejects(
-        () => service.markAsPaid(created.id, 'b'.repeat(64), PAYER),
+        () => service.markAsPaid(created.id, 'b'.repeat(64), PAYER, undefined, { settledAt: new Date() }),
         /Invoice not found, expired, or already processed/
       );
 
@@ -213,10 +213,10 @@ describe('Invoice persistence on Postgres', { skip: DATABASE_URL ? false : 'DATA
 
     try {
       const created = await service.createInvoice(createInput(SELLER_A, { amount: 33 }));
-      await service.markAsPaid(created.id, 'c'.repeat(64), PAYER);
+      await service.markAsPaid(created.id, 'c'.repeat(64), PAYER, undefined, { settledAt: new Date() });
 
       await assert.rejects(
-        () => service.markAsPaid(created.id, 'd'.repeat(64), PAYER),
+        () => service.markAsPaid(created.id, 'd'.repeat(64), PAYER, undefined, { settledAt: new Date() }),
         /Invoice not found, expired, or already processed/
       );
     } finally {

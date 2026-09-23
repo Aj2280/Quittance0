@@ -50,6 +50,10 @@ const ALIASES = {
   '@/lib/payment-monitor': `./${path.join(STUBS, 'payment-monitor.js')}`,
   // Only the socket is replaced — `lib/api.ts` itself stays under audit.
   axios: `./${path.join(STUBS, 'axios.js')}`,
+  // The invoice-payment-builder imports the SDK and Freighter API directly.
+  // The a11y tests render DOM only — no transactions are ever submitted.
+  '@stellar/stellar-sdk': `./${path.join(STUBS, 'stellar-sdk.js')}`,
+  '@stellar/freighter-api': `./${path.join(STUBS, 'freighter-api.js')}`,
 };
 
 /** Everything the audit renders, re-exported from one entry point. */
