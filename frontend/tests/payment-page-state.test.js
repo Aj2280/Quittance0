@@ -10,6 +10,7 @@ const {
   isLikelyTransactionHash,
   normalizePayerDetails,
   paymentReducer,
+  shouldDropPendingPayment,
   shouldPoll,
   shouldShowPaymentControls,
   stateForStatus,
@@ -469,4 +470,63 @@ test('an absent state is handled without throwing', () => {
   assert.equal(isResultState(null), false);
   assert.equal(describePaymentState(undefined), '');
   assert.equal(paymentStateKind(null), 'status');
+});
+
+// ---------------------------------------------------------------------------
+// Issue #508 - wallet-switch isolation for in-flight pay/verify
+// ---------------------------------------------------------------------------
+
+const WALLET_A = { publicKey: 'GALICE', network: 'TESTNET', connected: true };
+const WALLET_B = { publicKey: 'GBOB', network: 'TESTNET', connected: true };
+const DISCONNECTED = { publicKey: null, network: null, connected: false };
+
+test('an account switch drops in-flight pay and verify work', () => {
+  for (const status of [PAY_STATES.PAYING, PAY_STATES.VERIFYING, PAY_STATES.ERROR]) {
+    assert.equal(
+      shouldDropPendingPayment(WALLET_A, WALLET_B, status),
+      true,
+      `${status} must drop when the account underneath it changes`
+    );
+  }
+});
+
+test('a disconnect drops in-flight pay and verify work', () => {
+  for (const status of [PAY_STATES.PAYING, PAY_STATES.VERIFYING]) {
+    assert.equal(
+      shouldDropPendingPayment(WALLET_A, DISCONNECTED, status),
+      true,
+      `${status} must drop when the wallet disconnects`
+    );
+  }
+});
+
+test('a network-only change does not drop in-flight work', () => {
+  // The wallet gate already blocks the next action; the in-flight verify is
+  // not key-bound to the network, so it is allowed to land.
+  const sameKeyOtherNetwork = { ...WALLET_A, network: 'PUBLIC' };
+  assert.equal(shouldDropPendingPayment(WALLET_A, sameKeyOtherNetwork, PAY_STATES.VERIFYING), false);
+});
+
+test('a fresh connect drops nothing - there was no previous key', () => {
+  assert.equal(shouldDropPendingPayment(DISCONNECTED, WALLET_A, PAY_STATES.VERIFYING), false);
+  assert.equal(shouldDropPendingPayment(undefined, WALLET_A, PAY_STATES.PAYING), false);
+});
+
+test('reconnecting the same key keeps the session', () => {
+  assert.equal(shouldDropPendingPayment(WALLET_A, WALLET_A, PAY_STATES.VERIFYING), false);
+});
+
+test('terminal states are never reset by a wallet change', () => {
+  for (const status of [PAY_STATES.PAID, PAY_STATES.EXPIRED]) {
+    assert.equal(
+      shouldDropPendingPayment(WALLET_A, WALLET_B, status),
+      false,
+      `${status} must survive a wallet switch`
+    );
+    assert.equal(
+      shouldDropPendingPayment(WALLET_A, DISCONNECTED, status),
+      false,
+      `${status} must survive a disconnect`
+    );
+  }
 });

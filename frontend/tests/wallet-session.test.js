@@ -88,7 +88,10 @@ test('the session gate is the gate every surface already uses', () => {
   const idle = walletSessionGate(session({ connected: false, publicKey: null }), 'TESTNET');
   assert.equal(idle.status, 'disconnected');
 
-  const mismatch = walletSessionGate(session({ network: 'PUBLIC' }), 'TESTNET');
+  const mismatch = walletSessionGate(
+    session({ network: 'PUBLIC', networkPassphrase: 'Public Global Stellar Network ; September 2015' }),
+    'TESTNET'
+  );
   assert.equal(mismatch.status, 'wrong_network');
   assert.equal(mismatch.ready, false);
 });

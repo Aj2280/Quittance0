@@ -73,18 +73,23 @@ export function createInvoiceRouter(options: InvoiceRouterOptions): Router {
 
   router.get('/invoices/:id', handlers.getInvoice);
 
+  // GET /invoices/:id/events - seller-scoped audit feed (issue #515)
+  router.get('/invoices/:id/events', handlers.getPaymentEvents);
+
   // GET /invoices/:id/payment-info - Payment info (no rate limit, needed for checkout)
   router.get('/invoices/:id/payment-info', handlers.getPaymentInfo);
 
   const cancelMiddlewares: RequestHandler[] = [];
   const cancelAuthPreCheck: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
     const requireSig =
-      options.requireCancelSignature ?? (process.env.REQUIRE_CANCEL_SIGNATURE === 'true');
+      options.requireCancelSignature ??
+      (process.env.REQUIRE_CANCEL_SIGNATURE === 'true' ||
+        process.env.NODE_ENV === 'production');
     if (requireSig) {
-      const sellerKey =
-        req.body?.sellerPublicKey || req.headers['x-seller-public-key'] || req.query?.sellerPublicKey;
-      const signature =
-        req.body?.signature || req.headers['x-signature'] || req.headers['x-seller-signature'];
+      // Body-only contract (issue #517): the handler rejects query/header
+      // transports itself; this pre-check only enforces signature presence.
+      const sellerKey = req.body?.sellerPublicKey;
+      const signature = req.body?.signature;
       if (!sellerKey || !signature) {
         return res.status(401).json({
           success: false,

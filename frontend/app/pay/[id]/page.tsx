@@ -210,9 +210,14 @@ export default function PaymentPage() {
                       title=""
                       size={220}
                       description={`a request to pay ${amountLabel} with memo ${invoice.memo}`}
+                      copyValue={
+                        page.paymentInfo?.stellarUri || page.paymentInfo?.paymentUrl || undefined
+                      }
                     />
                     <p className="text-sm text-gray-700 text-center mt-4">
-                      Scan with your Stellar wallet app to pay instantly
+                      {page.paymentInfo?.stellarQrEncodesUri === false
+                        ? 'Scan to open the pay link, or copy the Stellar URI above into your wallet'
+                        : 'Scan with your Stellar wallet app to pay instantly'}
                     </p>
                   </section>
                   {isMobile && !showDesktopWalletAnyway ? (
