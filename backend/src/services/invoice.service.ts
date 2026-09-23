@@ -254,6 +254,30 @@ export class InvoiceService {
   }
 
   /**
+   * PENDING invoices due for monitor re-watch after a restart (issue #502).
+   * Scoped to the seller when given; always bounded. Expired rows are lazily
+   * transitioned first so they never come back as watches.
+   */
+  async listPendingInvoices(
+    sellerPublicKey?: string,
+    limit: number = 500
+  ): Promise<Invoice[]> {
+    await this.markExpiredInvoices();
+
+    const params: any[] = [];
+    let query = "SELECT * FROM invoices WHERE status = 'PENDING'";
+    if (sellerPublicKey) {
+      params.push(sellerPublicKey);
+      query += ` AND seller_public_key = $${params.length}`;
+    }
+    params.push(Math.max(1, limit));
+    query += ` ORDER BY created_at ASC LIMIT $${params.length}`;
+
+    const result = await this.db.query(query, params);
+    return result.rows.map((row) => this.mapRowToInvoice(row));
+  }
+
+  /**
    * Cancel an invoice
    */
   async cancelInvoice(invoiceId: string, sellerPublicKey?: string): Promise<Invoice> {
