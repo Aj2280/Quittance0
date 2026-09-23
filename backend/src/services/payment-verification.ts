@@ -220,33 +220,55 @@ export function normalizePaymentOperation(
 }
 
 /**
- * Finds the payment-delivering operation for an invoice.
- * If destination is given, prioritizes an operation paying that destination.
+ * The outcome of walking a transaction's operations for the invoice payment.
+ *
+ * A Stellar transaction can carry several operations — a `change_trust`
+ * before the pay, several payments, or a fee-bump envelope's inner ops.
+ * Verification must name exactly one payment rather than take the first:
+ * picking the wrong op can reject a legitimate payment, and silently
+ * summing or choosing between two payments to the seller would let a tx
+ * settle an invoice it never unambiguously paid.
+ */
+export type PaymentOperationSelection =
+  | { kind: 'none' }
+  | { kind: 'wrong_destination'; op: NormalizedPaymentOperation }
+  | { kind: 'ambiguous'; ops: NormalizedPaymentOperation[] }
+  | { kind: 'ok'; op: NormalizedPaymentOperation };
+
+/**
+ * Walks a transaction's operations and selects the invoice payment.
+ *
+ * Non-payment operations are ignored entirely. Payments to other
+ * destinations are ignored for attribution: when none reaches the
+ * invoice's destination the *first* payment op is still returned so the
+ * verifier can report the destination mismatch in its documented order.
+ * More than one payment to the invoice destination is ambiguous and
+ * fails closed — verification never sums or picks between them.
  *
  * @param operations - List of operations from Horizon.
- * @param destination - Target payment destination.
- * @returns Normalized payment operation or null.
+ * @param destination - The invoice's seller account.
+ * @returns The selection outcome; `ok` carries the unique matching op.
  */
-export function findPaymentOperation(
+export function selectInvoicePaymentOperation(
   operations: HorizonOperationLike[],
-  destination?: string,
-): NormalizedPaymentOperation | null {
-  const candidates = (operations || [])
+  destination: string,
+): PaymentOperationSelection {
+  const payments = (operations || [])
     .map(normalizePaymentOperation)
     .filter((op): op is NormalizedPaymentOperation => op !== null);
 
-  if (candidates.length === 0) {
-    return null;
+  if (payments.length === 0) {
+    return { kind: 'none' };
   }
 
-  if (destination) {
-    const match = candidates.find((op) => op.to === destination);
-    if (match) {
-      return match;
-    }
+  const toDestination = payments.filter((op) => op.to === destination);
+  if (toDestination.length > 1) {
+    return { kind: 'ambiguous', ops: toDestination };
   }
-
-  return candidates[0];
+  if (toDestination.length === 1) {
+    return { kind: 'ok', op: toDestination[0] };
+  }
+  return { kind: 'wrong_destination', op: payments[0] };
 }
 
 export interface VerifiedPayment {
@@ -336,10 +358,16 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
     return failure('NETWORK_MISMATCH');
   }
 
-  const paymentOp = findPaymentOperation(operations, expected.destination);
-  if (!paymentOp) {
+  const selection = selectInvoicePaymentOperation(operations, expected.destination);
+
+  if (selection.kind === 'none') {
     return failure('NO_PAYMENT_OPERATION');
   }
+  if (selection.kind === 'ambiguous') {
+    return failure('AMBIGUOUS_PAYMENT_OPERATION');
+  }
+
+  const paymentOp = selection.op;
 
   // Invoice memos are Stellar text memos. A hash, id or return memo is never
   // coerced into the string comparison: it is rejected outright so a payer

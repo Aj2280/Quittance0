@@ -16,8 +16,14 @@ Checks run in a fixed order so every caller reports the same *first* failure:
    Horizon round trip (`MISSING_TX_HASH`, `INVALID_TX_HASH`)
 2. **Network** — a testnet payment cannot settle a pubnet invoice
    (`NETWORK_MISMATCH`)
-3. **Payment operation** — the transaction must contain one
-   (`NO_PAYMENT_OPERATION`)
+3. **Payment operation** — the transaction's operations are walked for
+   payment-delivering ops (`payment`, `path_payment_strict_receive`,
+   `path_payment_strict_send`); non-payment ops like `change_trust` are
+   ignored. The transaction must contain exactly one payment to the
+   invoice's destination: zero payments anywhere is
+   `NO_PAYMENT_OPERATION`, and two or more payments to the seller is
+   `AMBIGUOUS_PAYMENT_OPERATION` — verification never sums them or picks
+   between them
 4. **Memo** — the transaction must carry a *text* memo (or none): `hash`,
    `id` and `return` memos are rejected outright as `MEMO_TYPE_MISMATCH`
    rather than coerced into the comparison, and a text memo must then equal
