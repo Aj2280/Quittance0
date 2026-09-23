@@ -36,6 +36,7 @@ import {
   warningForLatePayment,
 } from '../domain/invoice-settlement';
 import { cutoverDrainMode, simulationAllowed } from '../config/runtime';
+import { idempotencyKeyForCreate } from '../utils/idempotency';
 import { createRequestId } from '../utils/request-correlation-id';
 import { checkInvoiceVerifyLimit } from '../middleware/rate-limit';
 import { cacheVerificationResult } from '../middleware/verify-cache';
@@ -161,6 +162,17 @@ export function createInvoiceHandlers(options: InvoiceHandlerOptions): InvoiceHa
         if (validatedData.network && validatedData.network !== STELLAR_NETWORK) {
           return sendFailure(res, 400, 'Client wallet network does not match the server Stellar network');
         }
+        // Issue #514: prefer the caller's Idempotency-Key header; fall back to
+        // a derived signature inside its short window so even keyless retries
+        // cannot mint a second pay link for the same intent.
+        const headerKey = req.headers?.['idempotency-key'];
+        if (typeof headerKey === 'string' && headerKey) {
+          if (headerKey.length > 200 || !/^[A-Za-z0-9_:\-]+$/.test(headerKey)) {
+            return sendFailure(res, 400, 'Idempotency-Key header is invalid');
+          }
+          validatedData.idempotencyKey = headerKey;
+        }
+        validatedData.idempotencyKey = idempotencyKeyForCreate(validatedData);
         const invoice = await storage.createInvoice(validatedData);
         options.paymentMonitor?.registerWatch(invoice);
         const payment = await buildPaymentPayload(invoice);

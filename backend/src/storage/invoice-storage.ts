@@ -44,6 +44,8 @@ export interface StoredInvoice {
   latePaymentWarningCode?: LatePaymentWarningCode;
   expiresAt: Date;
   metadata?: any;
+  /** Internal dedupe key for replayed creates (issue #514); never payer-facing. */
+  idempotencyKey?: string;
 }
 
 export interface PayerInfo {

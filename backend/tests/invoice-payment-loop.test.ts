@@ -152,6 +152,9 @@ async function createInvoice(port: number, amount = 25) {
     },
     {
       'x-forwarded-for': `203.0.113.${++createRequestSequence}`,
+      // Each helper call is a distinct create intent; identical bodies inside
+      // the dedupe window would otherwise return the same invoice (#514).
+      'idempotency-key': `loop-${createRequestSequence}`,
     }
   );
 
