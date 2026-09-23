@@ -38,3 +38,93 @@ export interface InvoiceDto {
   expiresAt: IsoTimestamp;
   metadata?: unknown;
 }
+
+/**
+ * The public pay DTO: what `GET /invoices/:id` returns to any caller that did
+ * not authenticate as the invoice's seller (issue #503). The `/pay/[id]`
+ * checkout page, the QR payload, and the verify response only ever need
+ * these fields — client contact details, seller profile fields, payer
+ * identity, and settlement internals are workspace-only.
+ *
+ * `PUBLIC_INVOICE_FIELDS` is the whitelist the serializer applies; the
+ * contract test fails if a serialized response carries a key outside it, so
+ * the two shapes cannot silently drift.
+ */
+export interface PublicInvoiceDto {
+  id: string;
+  sellerPublicKey: string;
+  amount: number;
+  assetCode: string;
+  assetIssuer?: string;
+  memo: string;
+  status: InvoiceStatus;
+  paymentTxHash?: string;
+  latePaymentWarningCode?: string;
+  settlementContext?: string;
+  priorStatus?: InvoiceStatus;
+  createdAt: IsoTimestamp;
+  paidAt?: IsoTimestamp;
+  cancelledAt?: IsoTimestamp;
+  settledAt?: IsoTimestamp;
+  expiresAt: IsoTimestamp;
+}
+
+export const PUBLIC_INVOICE_FIELDS: ReadonlyArray<keyof PublicInvoiceDto> = [
+  'id',
+  'sellerPublicKey',
+  'amount',
+  'assetCode',
+  'assetIssuer',
+  'memo',
+  'status',
+  'paymentTxHash',
+  'latePaymentWarningCode',
+  'settlementContext',
+  'priorStatus',
+  'createdAt',
+  'paidAt',
+  'cancelledAt',
+  'settledAt',
+  'expiresAt',
+];
+
+/** Serializes a stored invoice down to the public pay shape. */
+export function toPublicInvoiceDto(invoice: {
+  id: string;
+  sellerPublicKey: string;
+  amount: number;
+  assetCode: string;
+  assetIssuer?: string;
+  memo: string;
+  status: InvoiceStatus;
+  paymentTxHash?: string;
+  latePaymentWarningCode?: string;
+  settlementContext?: string;
+  priorStatus?: InvoiceStatus;
+  createdAt: Date | IsoTimestamp;
+  paidAt?: Date | IsoTimestamp;
+  cancelledAt?: Date | IsoTimestamp;
+  settledAt?: Date | IsoTimestamp;
+  expiresAt: Date | IsoTimestamp;
+}): PublicInvoiceDto {
+  const iso = (v: Date | IsoTimestamp | undefined) =>
+    v === undefined ? undefined : v instanceof Date ? v.toISOString() : v;
+  return {
+    id: invoice.id,
+    sellerPublicKey: invoice.sellerPublicKey,
+    amount: invoice.amount,
+    assetCode: invoice.assetCode,
+    assetIssuer: invoice.assetIssuer,
+    memo: invoice.memo,
+    status: invoice.status,
+    paymentTxHash: invoice.paymentTxHash,
+    latePaymentWarningCode: invoice.latePaymentWarningCode,
+    settlementContext: invoice.settlementContext,
+    priorStatus: invoice.priorStatus,
+    createdAt: iso(invoice.createdAt) as IsoTimestamp,
+    paidAt: iso(invoice.paidAt),
+    cancelledAt: iso(invoice.cancelledAt),
+    settledAt: iso(invoice.settledAt),
+    expiresAt: iso(invoice.expiresAt) as IsoTimestamp,
+  };
+}

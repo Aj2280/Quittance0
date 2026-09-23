@@ -69,12 +69,18 @@ export class InvoiceService {
     const memo = generateInvoiceMemo();
     const expiresAt = calculateInvoiceExpiry(input.expiresInDays);
 
+    // Issue #514: the idempotency key rides a partial unique index on
+    // (seller_public_key, idempotency_key), so a racing replay hits the
+    // conflict arbiter instead of inserting a second row. DO NOTHING then
+    // re-select returns the original invoice — same id, same memo.
     const query = `
       INSERT INTO invoices (
         id, seller_public_key, seller_name, seller_email, amount,
         asset_code, asset_issuer, memo, description, customer_name,
-        customer_email, status, expires_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        customer_email, status, expires_at, idempotency_key
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      ON CONFLICT (seller_public_key, idempotency_key) WHERE idempotency_key IS NOT NULL
+      DO NOTHING
       RETURNING *
     `;
 
@@ -92,10 +98,21 @@ export class InvoiceService {
       input.customerEmail || null,
       'PENDING',
       expiresAt,
+      input.idempotencyKey || null,
     ];
 
     try {
       const result = await this.db.query(query, values);
+      if (result.rows.length === 0) {
+        const existing = await this.db.query(
+          'SELECT * FROM invoices WHERE seller_public_key = $1 AND idempotency_key = $2',
+          [input.sellerPublicKey, input.idempotencyKey]
+        );
+        if (existing.rows.length === 0) {
+          throw new Error('Idempotent replay lookup found no original invoice');
+        }
+        return this.mapRowToInvoice(existing.rows[0]);
+      }
       console.log('✅ Invoice created:', result.rows[0].id);
       return this.mapRowToInvoice(result.rows[0]);
     } catch (error: any) {
@@ -248,6 +265,30 @@ export class InvoiceService {
 
     query += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
     params.push(limit, offset);
+
+    const result = await this.db.query(query, params);
+    return result.rows.map((row) => this.mapRowToInvoice(row));
+  }
+
+  /**
+   * PENDING invoices due for monitor re-watch after a restart (issue #502).
+   * Scoped to the seller when given; always bounded. Expired rows are lazily
+   * transitioned first so they never come back as watches.
+   */
+  async listPendingInvoices(
+    sellerPublicKey?: string,
+    limit: number = 500
+  ): Promise<Invoice[]> {
+    await this.markExpiredInvoices();
+
+    const params: any[] = [];
+    let query = "SELECT * FROM invoices WHERE status = 'PENDING'";
+    if (sellerPublicKey) {
+      params.push(sellerPublicKey);
+      query += ` AND seller_public_key = $${params.length}`;
+    }
+    params.push(Math.max(1, limit));
+    query += ` ORDER BY created_at ASC LIMIT $${params.length}`;
 
     const result = await this.db.query(query, params);
     return result.rows.map((row) => this.mapRowToInvoice(row));
@@ -431,6 +472,7 @@ export class InvoiceService {
       latePaymentWarningCode: row.late_payment_warning_code,
       expiresAt: row.expires_at,
       metadata: row.metadata,
+      idempotencyKey: row.idempotency_key ?? undefined,
     };
   }
 

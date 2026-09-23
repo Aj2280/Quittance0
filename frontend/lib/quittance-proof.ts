@@ -108,8 +108,19 @@ function normalizeAmount(value: string | number | null | undefined): string | nu
   return whole + '.' + fraction.padEnd(7, '0').slice(0, 7);
 }
 
+// Mirrors shared/network.ts's resolveStellarNetwork + explorerSegmentFor.
+// This file is loaded directly by node tests, which cannot follow the
+// '@shared/*' tsconfig alias, so the rule is inlined rather than imported.
 function normalizeNetwork(network: string | null | undefined): 'testnet' | 'public' {
-  return String(network ?? '').toLowerCase() === 'testnet' ? 'testnet' : 'public';
+  const hint = String(network ?? '').trim().toLowerCase();
+  if (hint === 'testnet' || hint === 'public') return hint;
+  const configured = String(process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? 'TESTNET')
+    .trim()
+    .toUpperCase();
+  if (configured !== 'TESTNET' && configured !== 'PUBLIC') {
+    throw new Error(`Stellar network must be TESTNET or PUBLIC; got "${configured}"`);
+  }
+  return configured === 'TESTNET' ? 'testnet' : 'public';
 }
 
 function isSettled(status: string): boolean {
