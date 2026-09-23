@@ -9,7 +9,7 @@ import {
   stopFreighterWalletWatcher,
 } from '@/lib/stellar';
 import { useWalletStore } from '@/lib/store';
-import { networkMatches, walletGate } from '@/lib/freighter-availability';
+import { sessionNetworkMatches, walletGate } from '@/lib/freighter-availability';
 
 const SESSION_TOAST_ID = 'wallet-session-sync';
 
@@ -39,7 +39,7 @@ export default function WalletSessionSync() {
 
       if (!session.connected || !session.publicKey) return;
 
-      if (!networkMatches(session.network, EXPECTED_WALLET_NETWORK)) {
+      if (!sessionNetworkMatches(session, EXPECTED_WALLET_NETWORK)) {
         if (announce && changed) {
           toast.warning(walletGate(session, EXPECTED_WALLET_NETWORK).title, {
             id: SESSION_TOAST_ID,

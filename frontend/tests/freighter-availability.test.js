@@ -7,6 +7,7 @@ const {
   FREIGHTER_WRONG_NETWORK_MESSAGE,
   detectFreighter,
   isNetworkMatching,
+  sessionNetworkMatches,
   walletGate,
 } = require('../lib/freighter-availability');
 
@@ -113,4 +114,74 @@ test('walletGate is ready on the expected network', () => {
 
 test('walletGate tolerates a missing session', () => {
   assert.equal(walletGate(undefined, 'TESTNET').status, 'disconnected');
+});
+
+// Issue #511: the passphrase is the strict check — a custom network may call
+// itself "TESTNET", but only the real testnet reports the SDF passphrase.
+test('walletGate is ready when the reported passphrase matches exactly', () => {
+  const gate = walletGate(
+    {
+      freighterAvailable: true,
+      connected: true,
+      publicKey: SELLER_KEY,
+      network: 'TESTNET',
+      networkPassphrase: 'Test SDF Network ; September 2015',
+    },
+    'TESTNET'
+  );
+
+  assert.equal(gate.status, 'ready');
+  assert.equal(gate.ready, true);
+});
+
+test('walletGate blocks a wallet whose passphrase belongs to the other network', () => {
+  const gate = walletGate(
+    {
+      freighterAvailable: true,
+      connected: true,
+      publicKey: SELLER_KEY,
+      network: 'TESTNET',
+      networkPassphrase: 'Public Global Stellar Network ; September 2015',
+    },
+    'TESTNET'
+  );
+
+  assert.equal(gate.status, 'wrong_network');
+  assert.equal(gate.ready, false);
+  assert.equal(gate.action, 'switch_network');
+});
+
+test('walletGate blocks a self-named custom network with a foreign passphrase', () => {
+  const gate = walletGate(
+    {
+      freighterAvailable: true,
+      connected: true,
+      publicKey: SELLER_KEY,
+      network: 'TESTNET',
+      networkPassphrase: 'Custom Standalone Network ; March 2026',
+    },
+    'TESTNET'
+  );
+
+  assert.equal(gate.status, 'wrong_network');
+  assert.equal(gate.ready, false);
+});
+
+test('sessionNetworkMatches prefers the passphrase over the network name', () => {
+  assert.equal(
+    sessionNetworkMatches(
+      { network: 'TESTNET', networkPassphrase: 'Test SDF Network ; September 2015' },
+      'TESTNET'
+    ),
+    true
+  );
+  assert.equal(
+    sessionNetworkMatches(
+      { network: 'TESTNET', networkPassphrase: 'Not The Real Passphrase' },
+      'TESTNET'
+    ),
+    false
+  );
+  assert.equal(sessionNetworkMatches({ network: 'TESTNET' }, 'TESTNET'), true);
+  assert.equal(sessionNetworkMatches({ network: 'PUBLIC' }, 'TESTNET'), false);
 });

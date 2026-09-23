@@ -6,6 +6,7 @@ import {
   toApiError,
 } from './api-runtime.js';
 import { resolveVerificationError } from './verification.js';
+import { resolveStellarNetwork } from '@shared/network';
 
 /**
  * The API origin, resolved once per build.
@@ -92,8 +93,10 @@ export const invoiceApi = {
     return response.data;
   },
 
-  cancel: async (id: string, sellerPublicKey?: string) => {
-    const response = await api.post(`/invoices/${id}/cancel`, { sellerPublicKey });
+  // One proof path (issue #517): the seller key and the Freighter signature
+  // over `cancel:<id>` travel in the request body — never in query or header.
+  cancel: async (id: string, sellerPublicKey: string, signature?: string) => {
+    const response = await api.post(`/invoices/${id}/cancel`, { sellerPublicKey, signature });
     return response.data;
   },
 
@@ -101,7 +104,9 @@ export const invoiceApi = {
     const response = await api.post(`/invoices/${id}/verify`, {
       txHash,
       // Lets the server reject a payment submitted from the wrong wallet network.
-      network: process.env.NEXT_PUBLIC_STELLAR_NETWORK,
+      // Resolved through the shared contract so the client sends the canonical
+      // 'TESTNET' | 'PUBLIC' name rather than a raw env string (issue #511).
+      network: resolveStellarNetwork(process.env.NEXT_PUBLIC_STELLAR_NETWORK),
       ...payerInfo
     });
     return response.data;
