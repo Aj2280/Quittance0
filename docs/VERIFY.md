@@ -34,12 +34,32 @@ Checks run in a fixed order so every caller reports the same *first* failure:
    `id` and `return` memos are rejected outright as `MEMO_TYPE_MISMATCH`
    rather than coerced into the comparison, and a text memo must then equal
    the invoice memo (`MEMO_MISMATCH`)
-5. **Destination** — must be the seller's account (`DESTINATION_MISMATCH`)
+5. **Destination** — must be the seller's account (`DESTINATION_MISMATCH`).
+   A muxed `M...` address counts when its underlying account is the seller's
+   `G...` key; a muxed address of a different account does not.
 6. **Amount** — compared at Stellar's 7-decimal precision with no tolerance:
    less than the invoice is `AMOUNT_TOO_LOW`, more is `AMOUNT_TOO_HIGH`, and
    `AMOUNT_MISMATCH` is reserved for an amount that cannot be compared at all
    (`abc`, an empty string, a missing operation field)
 7. **Asset** — code *and* issuer (`ASSET_MISMATCH`)
+
+## Destination matching and muxed accounts
+
+Wallets may pay a muxed `M...` account whose underlying `G` account is the
+seller. Destination matching follows Stellar's muxed-account rules rather than
+comparing strings:
+
+| Payment `to` | Invoice seller | Result |
+| --- | --- | --- |
+| `G...` equal to the seller | `G...` | **settles** |
+| `M...` whose base account is the seller | `G...` | **settles**; the muxed id is recorded on the `PAYMENT_CONFIRMED` event |
+| `M...` of a different base account | `G...` | `DESTINATION_MISMATCH` |
+| malformed `M...` or any other string | `G...` | `DESTINATION_MISMATCH` |
+
+Decoding goes through the SDK (`MuxedAccount.fromAddress`), never string
+slicing — a malformed destination fails closed instead of being coerced into a
+`G` key. The seller identity stored on the invoice, shown on the proof, and
+used for dashboard scoping stays the plain `G...` account throughout.
 
 ## Amount policy
 

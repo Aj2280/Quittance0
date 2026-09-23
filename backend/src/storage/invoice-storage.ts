@@ -69,6 +69,8 @@ export interface PayerInfo {
 export interface MarkAsPaidOptions {
   /** Horizon ledger close time for the matching transaction. */
   settledAt?: Date;
+  /** Muxed id when the payment went to a muxed `M...` account of the seller. */
+  destinationMuxedId?: string;
 }
 
 /**

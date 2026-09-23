@@ -25,9 +25,12 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Application } from 'express';
+import { Account, Keypair, MuxedAccount } from '@stellar/stellar-sdk';
+import memoryStorage from '../src/storage/memory-storage';
 
 const SELLER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 const PAYER = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+const OTHER = Keypair.random().publicKey();
 /**
  * A distinct transaction hash per verification, as Stellar guarantees: a hash
  * belongs to exactly one transaction, and one transaction settles one invoice
@@ -223,6 +226,39 @@ describe('invoice payment loop', () => {
 
     const fetched = await jsonRequest(port, 'GET', `/api/invoices/${invoice.id}`);
     assert.equal(fetched.body.data.status, 'PAID');
+  });
+
+  it('settles a payment sent to a muxed M... account of the seller', async () => {
+    const invoice = await createInvoice(port);
+    const muxed = new MuxedAccount(new Account(SELLER, '0'), '4242').accountId();
+    horizonResponder = paymentOn({ memo: invoice.memo, to: muxed });
+
+    const verified = await jsonRequest(port, 'POST', `/api/invoices/${invoice.id}/verify`, {
+      txHash: nextTxHash(),
+    });
+
+    assert.equal(verified.status, 200, JSON.stringify(verified.body));
+    assert.equal(verified.body.data.status, 'PAID');
+
+    const events = memoryStorage.getPaymentEvents(invoice.id);
+    const confirmed = events.filter((event) => event.eventType === 'PAYMENT_CONFIRMED');
+    assert.equal(confirmed.at(-1)?.eventData.destinationMuxedId, '4242');
+  });
+
+  it('refuses a payment to a muxed M... account of a different seller', async () => {
+    const invoice = await createInvoice(port);
+    const foreignMuxed = new MuxedAccount(new Account(OTHER, '0'), '4242').accountId();
+    horizonResponder = paymentOn({ memo: invoice.memo, to: foreignMuxed });
+
+    const verified = await jsonRequest(port, 'POST', `/api/invoices/${invoice.id}/verify`, {
+      txHash: nextTxHash(),
+    });
+
+    assert.equal(verified.status, 400);
+    assert.equal(verified.body.code, 'DESTINATION_MISMATCH');
+
+    const fetched = await jsonRequest(port, 'GET', `/api/invoices/${invoice.id}`);
+    assert.equal(fetched.body.data.status, 'PENDING');
   });
 
   it('stores payer details supplied with the verification', async () => {

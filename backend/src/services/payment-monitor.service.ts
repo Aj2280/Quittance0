@@ -555,7 +555,7 @@ export class PaymentMonitorService {
         payment.txHash,
         payment.from,
         undefined,
-        { settledAt }
+        { settledAt, destinationMuxedId: verification.value.toMuxedId }
       );
       this.processedTxHashes.add(payment.txHash);
       this.unregisterWatch(invoice.id);
