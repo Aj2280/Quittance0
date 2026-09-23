@@ -6,7 +6,13 @@ invoice controller, and `stellar.service` — routes through
 rejection codes stay identical everywhere.
 
 The module is pure: callers fetch the transaction and its operations from
-Horizon and hand them in.
+Horizon and hand them in. All Horizon traffic goes through
+`backend/src/utils/horizon-client.ts`, which bounds each call with a
+timeout, retries 429/5xx honoring `Retry-After`, and shares one concurrency
+budget between verify and the monitor. When Horizon stays unreachable the
+caller reports `VERIFY_UNAVAILABLE` (503) rather than
+`TRANSACTION_NOT_FOUND` — an outage must never read as a rejection, and it
+is never written to the verify cache.
 
 ## Order of checks
 
@@ -16,10 +22,21 @@ Checks run in a fixed order so every caller reports the same *first* failure:
    Horizon round trip (`MISSING_TX_HASH`, `INVALID_TX_HASH`)
 2. **Network** — a testnet payment cannot settle a pubnet invoice
    (`NETWORK_MISMATCH`)
-3. **Payment operation** — the transaction must contain one
-   (`NO_PAYMENT_OPERATION`)
-4. **Memo** — must equal the invoice memo (`MEMO_MISMATCH`)
-5. **Destination** — must land on the seller's account (`DESTINATION_MISMATCH`)
+3. **Payment operation** — the transaction's operations are walked for
+   payment-delivering ops (`payment`, `path_payment_strict_receive`,
+   `path_payment_strict_send`); non-payment ops like `change_trust` are
+   ignored. The transaction must contain exactly one payment to the
+   invoice's destination: zero payments anywhere is
+   `NO_PAYMENT_OPERATION`, and two or more payments to the seller is
+   `AMBIGUOUS_PAYMENT_OPERATION` — verification never sums them or picks
+   between them
+4. **Memo** — the transaction must carry a *text* memo (or none): `hash`,
+   `id` and `return` memos are rejected outright as `MEMO_TYPE_MISMATCH`
+   rather than coerced into the comparison, and a text memo must then equal
+   the invoice memo (`MEMO_MISMATCH`)
+5. **Destination** — must be the seller's account (`DESTINATION_MISMATCH`).
+   A muxed `M...` address counts when its underlying account is the seller's
+   `G...` key; a muxed address of a different account does not.
 6. **Amount** — compared at Stellar's 7-decimal precision with no tolerance:
    less than the invoice is `AMOUNT_TOO_LOW`, more is `AMOUNT_TOO_HIGH`, and
    `AMOUNT_MISMATCH` is reserved for an amount that cannot be compared at all

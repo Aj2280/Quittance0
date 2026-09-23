@@ -22,10 +22,10 @@ import { CREATED_INVOICE_ID, MAIN_CONTENT_ID, describeAmount } from '@/lib/a11y'
 
 export default function HomePage() {
   const [createdInvoice, setCreatedInvoice] = useState<any>(null);
-  const { publicKey, connected, network, freighterAvailable, isWrongNetwork } = useWalletStore();
+  const { publicKey, connected, network, networkPassphrase, freighterAvailable, isWrongNetwork } = useWalletStore();
   const resultRef = useRef<HTMLDivElement>(null);
   const gate = walletGate(
-    { freighterAvailable, connected, publicKey, network },
+    { freighterAvailable, connected, publicKey, network, networkPassphrase },
     EXPECTED_WALLET_NETWORK
   );
 

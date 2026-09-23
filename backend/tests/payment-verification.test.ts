@@ -484,6 +484,88 @@ describe('checkPayerInfo', () => {
   });
 });
 
+describe('verifyHorizonPayment — multi-operation transactions (#504)', () => {
+  it('verifies a payment preceded by a change_trust operation', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ assetCode: 'USDC', assetIssuer: USDC_ISSUER }),
+        operations: [
+          { type: 'change_trust', asset_code: 'USDC', asset_issuer: USDC_ISSUER },
+          paymentOp({
+            asset_type: 'credit_alphanum4',
+            asset_code: 'USDC',
+            asset_issuer: USDC_ISSUER,
+          }),
+        ],
+      })
+    );
+    assert.equal(result.ok, true);
+  });
+
+  it('finds the matching payment later in the operation list', () => {
+    const result = verifyHorizonPayment(
+      input({
+        operations: [
+          { type: 'manage_data', name: 'x', value: 'y' },
+          paymentOp({ to: OTHER_ACCOUNT }),
+          paymentOp(),
+        ],
+      })
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.value.to, SELLER);
+  });
+
+  it('ignores payments to other destinations when selecting the invoice op', () => {
+    // Two payment ops: only the one to the seller settles the invoice, and
+    // its amount — not the other payment's — is what gets compared.
+    const result = verifyHorizonPayment(
+      input({
+        operations: [
+          paymentOp({ to: OTHER_ACCOUNT, amount: '999.0000000' }),
+          paymentOp(),
+        ],
+      })
+    );
+    assert.equal(result.ok, true);
+  });
+
+  it('fails closed when two payments reach the invoice destination', () => {
+    const result = verifyHorizonPayment(
+      input({
+        operations: [paymentOp({ amount: '50.0000000' }), paymentOp()],
+      })
+    );
+    assert.equal(result.ok, false);
+    assert.equal(codeOf(result), 'AMBIGUOUS_PAYMENT_OPERATION');
+  });
+
+  it('fails closed on two matching payments even when each alone would pass', () => {
+    const result = verifyHorizonPayment(
+      input({ operations: [paymentOp(), paymentOp({ from: OTHER_ACCOUNT })] })
+    );
+    assert.equal(result.ok, false);
+    assert.equal(codeOf(result), 'AMBIGUOUS_PAYMENT_OPERATION');
+  });
+
+  it('still reports DESTINATION_MISMATCH when no payment reaches the seller', () => {
+    const result = verifyHorizonPayment(
+      input({ operations: [paymentOp({ to: OTHER_ACCOUNT })] })
+    );
+    assert.equal(result.ok, false);
+    assert.equal(codeOf(result), 'DESTINATION_MISMATCH');
+  });
+
+  it('reports NO_PAYMENT_OPERATION when only non-payment ops exist', () => {
+    const result = verifyHorizonPayment(
+      input({ operations: [{ type: 'change_trust' }, { type: 'manage_data' }] })
+    );
+    assert.equal(result.ok, false);
+    assert.equal(codeOf(result), 'NO_PAYMENT_OPERATION');
+  });
+});
+
 describe('shared contract', () => {
   it('matches the client mirror code for code and message for message', () => {
     // Acceptance criterion 1: every verify path must reject with equivalent

@@ -1,30 +1,66 @@
-// Verification result caching to prevent Horizon amplification. Once a txHash
-// is verified for an invoice, the result is cached and subsequent verify calls
-// for the same (invoice, txHash) pair skip the Horizon round trip.
+// Verification result caching to prevent Horizon amplification. The verify
+// route runs this middleware before the handler; a hit replays the recorded
+// response, a miss falls through and the handler stores the outcome via
+// cacheVerificationResult().
 //
-// Design: Cache hits return the existing invoice state. Cache misses proceed to
-// the handler. The handler is responsible for storing the result after a
-// successful Horizon lookup via cacheVerificationResult().
-//
-// TTL is set to the invoice expiry window (typically 72 hours) plus a buffer.
-import { Request, Response, NextFunction } from 'express';
+// Design: entries are keyed by (invoiceId, txHash) so a cached outcome can
+// never settle a different invoice. TTL depends on what the verdict says about
+// the transaction:
+//   - verified PAID       -> the invoice expiry window (72h); PAID is terminal,
+//                            so the replay stays correct.
+//   - semantic rejections -> same window; a memo/amount/destination mismatch is
+//                            a permanent fact about the transaction.
+//   - TRANSACTION_NOT_FOUND -> 60s only. The hash may simply be ahead of
+//                            Horizon indexing, or the lookup may have failed
+//                            transiently (outage / 429 also surface here); a
+//                            long negative TTL would turn a retry into a
+//                            permanent block.
+//   - transient-state codes -> never cached at all.
+import { Request, Response, NextFunction, RequestHandler } from 'express';
 import type { Redis } from 'ioredis';
 import { createRedisClient } from '../config/redis';
 
-const CACHE_TTL_SECONDS = 259200; // 72 hours (invoice expiry window)
+const VERIFIED_TTL_SECONDS = 259200; // 72 hours (invoice expiry window)
+const NOT_FOUND_TTL_SECONDS = 60; // short: indexing lag must not wedge a valid hash
+
+// Codes describing a transient service state, not a fact about the
+// transaction. Caching them would convert an outage into a lasting rejection.
+const NEVER_CACHE_CODES: ReadonlySet<string> = new Set([
+  'VERIFY_UNAVAILABLE',
+  'VERIFY_RATE_LIMIT_EXCEEDED',
+  'TRANSACTION_CLOSE_TIME_UNAVAILABLE',
+]);
+
+export interface CachedVerificationBody {
+  success: boolean;
+  code?: string;
+}
 
 interface CachedVerification {
   invoiceId: string;
   txHash: string;
-  result: 'verified' | 'rejected';
-  code?: string;
-  cachedAt: number;
+  httpStatus: number;
+  body: CachedVerificationBody;
+  expiresAt: number;
 }
 
-class VerificationCache {
+/**
+ * The TTL a response body earns, or null when the outcome must not be stored.
+ * Exported so the caching policy can be tested without standing up Express.
+ */
+export function verificationCacheTtl(body: CachedVerificationBody): number | null {
+  if (body.success) return VERIFIED_TTL_SECONDS;
+  if (body.code === 'TRANSACTION_NOT_FOUND') return NOT_FOUND_TTL_SECONDS;
+  if (body.code && NEVER_CACHE_CODES.has(body.code)) return null;
+  return VERIFIED_TTL_SECONDS;
+}
+
+export class VerificationCache {
   private redis: Redis | null = null;
   private memoryCache = new Map<string, CachedVerification>();
   private connectionAttempted = false;
+
+  constructor(private readonly now: () => number = () => Date.now()) {}
 
   private async getClient(): Promise<Redis | null> {
     if (!this.connectionAttempted) {
@@ -51,7 +87,10 @@ class VerificationCache {
       if (client) {
         const cached = await client.get(key);
         if (cached) {
-          return JSON.parse(cached);
+          const entry: CachedVerification = JSON.parse(cached);
+          // Redis expires keys natively; expiresAt still guards entries that
+          // were written with a longer TTL under an older policy.
+          return entry.expiresAt > this.now() ? entry : null;
         }
       }
     } catch (error) {
@@ -59,23 +98,32 @@ class VerificationCache {
     }
 
     // Fallback to memory
-    return this.memoryCache.get(key) || null;
+    const entry = this.memoryCache.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt <= this.now()) {
+      this.memoryCache.delete(key);
+      return null;
+    }
+    return entry;
   }
 
-  async set(invoiceId: string, txHash: string, result: 'verified' | 'rejected', code?: string): Promise<void> {
+  async set(invoiceId: string, txHash: string, httpStatus: number, body: CachedVerificationBody): Promise<void> {
+    const ttl = verificationCacheTtl(body);
+    if (ttl === null) return;
+
     const key = this.cacheKey(invoiceId, txHash);
     const cached: CachedVerification = {
       invoiceId,
       txHash,
-      result,
-      code,
-      cachedAt: Date.now(),
+      httpStatus,
+      body,
+      expiresAt: this.now() + ttl * 1000,
     };
 
     try {
       const client = await this.getClient();
       if (client) {
-        await client.setex(key, CACHE_TTL_SECONDS, JSON.stringify(cached));
+        await client.setex(key, ttl, JSON.stringify(cached));
       }
     } catch (error) {
       console.warn('[VerifyCache] Redis set failed, using memory:', error);
@@ -83,91 +131,92 @@ class VerificationCache {
 
     // Always store in memory as backup
     this.memoryCache.set(key, cached);
-    
+
     // Cleanup old memory entries
     if (this.memoryCache.size > 10000) {
       this.cleanup();
     }
   }
 
+  /** Remove every entry. Exists for tests; production never needs to flush. */
+  async clear(): Promise<void> {
+    this.memoryCache.clear();
+    try {
+      const client = await this.getClient();
+      if (client) {
+        const keys = await client.keys('verify:*');
+        if (keys.length) await client.del(...keys);
+      }
+    } catch (error) {
+      console.warn('[VerifyCache] Redis clear failed:', error);
+    }
+  }
+
   private cleanup(): void {
-    const cutoff = Date.now() - CACHE_TTL_SECONDS * 1000;
+    const now = this.now();
     for (const [key, entry] of this.memoryCache.entries()) {
-      if (entry.cachedAt < cutoff) {
+      if (entry.expiresAt <= now) {
         this.memoryCache.delete(key);
       }
     }
   }
 }
 
-const cache = new VerificationCache();
+export const verificationCache = new VerificationCache();
 
 /**
- * Middleware that checks if a verification request has already been processed.
- * If found in cache, returns the cached response immediately. Otherwise, allows
- * the request to proceed to the handler.
+ * Build the middleware around an explicit cache so tests can inject one with a
+ * controllable clock. The route uses the module-level `verifyCacheMiddleware`
+ * bound to the shared `verificationCache`.
  */
-export function verifyCacheMiddleware(req: Request, res: Response, next: NextFunction): void {
-  // Only apply to verification endpoints
-  if (!req.path.includes('/verify')) {
-    return next();
-  }
+export function createVerifyCacheMiddleware(cache: VerificationCache): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    // Only apply to verification endpoints
+    if (!req.path.includes('/verify')) {
+      return next();
+    }
 
-  const invoiceId = req.params.id;
-  const txHash = req.body?.txHash;
+    const invoiceId = req.params.id;
+    const txHash = req.body?.txHash;
 
-  if (!invoiceId || !txHash) {
-    return next();
-  }
+    if (!invoiceId || !txHash) {
+      return next();
+    }
 
-  cache.get(invoiceId, txHash)
-    .then(cached => {
-      if (cached) {
-        console.log(`[VerifyCache] Cache hit for invoice ${invoiceId}, txHash ${txHash}`);
-        
-        if (cached.result === 'verified') {
-          // Return success without hitting Horizon
-          res.status(200).json({
-            success: true,
-            message: 'Payment already verified (cached)',
-            cached: true,
-          });
-        } else {
-          // Return previous rejection
-          res.status(400).json({
-            success: false,
-            error: 'Verification previously failed',
-            code: cached.code || 'VERIFICATION_FAILED',
-            cached: true,
-          });
+    cache.get(invoiceId, txHash)
+      .then(cached => {
+        if (!cached) {
+          return next();
         }
-      } else {
-        // Cache miss, proceed to handler
+        console.log(`[VerifyCache] Cache hit for invoice ${invoiceId}, txHash ${txHash}`);
+        // Replay the exact response the first attempt produced.
+        res.status(cached.httpStatus).json({ ...cached.body, cached: true });
+      })
+      .catch(error => {
+        console.error('[VerifyCache] Check failed:', error);
+        // Fail open: proceed to handler if cache check breaks
         next();
-      }
-    })
-    .catch(error => {
-      console.error('[VerifyCache] Check failed:', error);
-      // Fail open: proceed to handler if cache check breaks
-      next();
-    });
+      });
+  };
 }
+
+export const verifyCacheMiddleware = createVerifyCacheMiddleware(verificationCache);
 
 /**
  * Store a verification result in the cache. Call this from the verify handler
- * after a successful Horizon lookup.
+ * with the status code and body the response is about to send.
  */
 export async function cacheVerificationResult(
   invoiceId: string,
   txHash: string,
-  result: 'verified' | 'rejected',
-  code?: string
+  httpStatus: number,
+  body: CachedVerificationBody
 ): Promise<void> {
   try {
-    await cache.set(invoiceId, txHash, result, code);
+    await verificationCache.set(invoiceId, txHash, httpStatus, body);
   } catch (error) {
     console.error('[VerifyCache] Failed to cache result:', error);
-    // Non-fatal: verification still succeeded, just won't be cached
+    // Non-fatal: verification still completed, just won't be cached
   }
 }
 

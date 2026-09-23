@@ -6,6 +6,7 @@ import {
   toApiError,
 } from './api-runtime.js';
 import { resolveVerificationError } from './verification.js';
+import { resolveStellarNetwork } from '@shared/network';
 
 /**
  * The API origin, resolved once per build.
@@ -56,6 +57,7 @@ export const invoiceApi = {
     sellerName?: string;
     sellerEmail?: string;
     network?: string;
+    idempotencyKey?: string;
   }) => {
     const normalizedAssetCode = data.assetCode ? data.assetCode.toUpperCase() : 'XLM';
     const response = await api.post('/invoices', {
@@ -65,8 +67,13 @@ export const invoiceApi = {
     return response.data;
   },
 
-  getById: async (id: string) => {
-    const response = await api.get(`/invoices/${id}`);
+  getById: async (id: string, sellerPublicKey?: string | null) => {
+    // Workspace fields (client contact, payer identity) are only returned when
+    // the caller presents the invoice's own seller key — issue #503. The pay
+    // page calls this without a key and receives the public pay DTO.
+    const response = await api.get(`/invoices/${id}`, {
+      params: sellerPublicKey ? { sellerPublicKey } : undefined,
+    });
     return response.data;
   },
 
@@ -87,8 +94,19 @@ export const invoiceApi = {
     return response.data;
   },
 
-  cancel: async (id: string, sellerPublicKey?: string) => {
-    const response = await api.post(`/invoices/${id}/cancel`, { sellerPublicKey });
+  // Seller-only audit feed (issue #515): rejected verifies and monitor
+  // rejections for this invoice. Requires the invoice's own seller key.
+  getPaymentEvents: async (id: string, sellerPublicKey: string) => {
+    const response = await api.get(`/invoices/${id}/events`, {
+      params: { sellerPublicKey },
+    });
+    return response.data;
+  },
+
+  // One proof path (issue #517): the seller key and the Freighter signature
+  // over `cancel:<id>` travel in the request body — never in query or header.
+  cancel: async (id: string, sellerPublicKey: string, signature?: string) => {
+    const response = await api.post(`/invoices/${id}/cancel`, { sellerPublicKey, signature });
     return response.data;
   },
 
@@ -96,7 +114,9 @@ export const invoiceApi = {
     const response = await api.post(`/invoices/${id}/verify`, {
       txHash,
       // Lets the server reject a payment submitted from the wrong wallet network.
-      network: process.env.NEXT_PUBLIC_STELLAR_NETWORK,
+      // Resolved through the shared contract so the client sends the canonical
+      // 'TESTNET' | 'PUBLIC' name rather than a raw env string (issue #511).
+      network: resolveStellarNetwork(process.env.NEXT_PUBLIC_STELLAR_NETWORK),
       ...payerInfo
     });
     return response.data;

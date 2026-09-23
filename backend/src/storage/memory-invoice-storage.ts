@@ -51,6 +51,18 @@ export class MemoryInvoiceStorage implements InvoiceStorage {
   async countInvoices(): Promise<number> {
     return this.service.countInvoices();
   }
+
+  async getPaymentEvents(invoiceId: string) {
+    return this.service.getPaymentEvents(invoiceId);
+  }
+
+  async logPaymentEvent(
+    invoiceId: string,
+    eventType: string,
+    eventData?: Record<string, unknown> | null
+  ) {
+    return this.service.logPaymentEvent(invoiceId, eventType, eventData);
+  }
 }
 
 export default new MemoryInvoiceStorage();
