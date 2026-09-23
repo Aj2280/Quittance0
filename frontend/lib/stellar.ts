@@ -25,6 +25,12 @@ import {
   resolveStellarNetwork,
   walletNetworkMatches,
 } from '@shared/network';
+import {
+  accountHasTrustline,
+  classifyTrustlinePreflight,
+  trustlinePreflightMessage,
+  type TrustlinePreflight,
+} from './trustline-preflight';
 
 // Network configuration — one resolver for the whole app (issue #511):
 // NEXT_PUBLIC_STELLAR_NETWORK decides the passphrase Freighter must report,
@@ -53,19 +59,46 @@ export const getExplorerAccountUrl = (publicKey: string, walletNetwork = STELLAR
 };
 
 const getTrustlineMessage = (assetCode: string): string =>
-  `Your wallet does not have a ${assetCode} trustline on ${STELLAR_NETWORK.toLowerCase()}. Add the ${assetCode} trustline in Freighter, or ask the seller for an XLM invoice.`;
+  trustlinePreflightMessage('MISSING_TRUSTLINE', assetCode, STELLAR_NETWORK.toLowerCase());
 
 const hasAssetTrustline = (
   account: StellarSdk.Horizon.AccountResponse,
   assetCode: string,
   assetIssuer: string
-): boolean =>
-  account.balances.some(
-    (balance: any) =>
-      balance.asset_type !== 'native' &&
-      balance.asset_code === assetCode &&
-      balance.asset_issuer === assetIssuer
-  );
+): boolean => accountHasTrustline(account, assetCode, assetIssuer);
+
+/**
+ * Preflight for credit-asset payments (issue #506): resolve the payer's
+ * account before Freighter opens so a missing trustline blocks submit with an
+ * actionable message. Native XLM short-circuits; a Horizon outage is a
+ * retryable failure, never a silent pass.
+ */
+export const preflightAssetTrustline = async (
+  publicKey: string,
+  assetCode: string,
+  assetIssuer?: string
+): Promise<TrustlinePreflight> => {
+  const normalizedAssetCode = (assetCode || 'XLM').toUpperCase();
+  if (normalizedAssetCode === 'XLM') {
+    return { ok: true, code: 'NATIVE_ASSET' };
+  }
+
+  let account: StellarSdk.Horizon.AccountResponse | null = null;
+  let lookupError: unknown;
+  try {
+    account = await loadAccount(publicKey);
+  } catch (error) {
+    lookupError = error;
+  }
+
+  return classifyTrustlinePreflight({
+    assetCode: normalizedAssetCode,
+    assetIssuer,
+    account,
+    error: lookupError,
+    networkLabel: STELLAR_NETWORK.toLowerCase(),
+  });
+};
 
 const isMissingTrustlineError = (error: any): boolean => {
   const operationCodes = error?.response?.data?.extras?.result_codes?.operations;
@@ -540,6 +573,7 @@ const stellarService = {
   watchFreighterNetwork,
   loadAccount,
   getAccountBalance,
+  preflightAssetTrustline,
   sendPayment,
   getTransaction,
   checkTransactionStatus,

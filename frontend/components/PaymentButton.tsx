@@ -7,6 +7,7 @@ import {
   requestWalletAccess,
   getFreighterNetwork,
   isWrongNetwork,
+  preflightAssetTrustline,
   NETWORK_DISPLAY_NAME,
 } from '@/lib/stellar';
 import {
@@ -18,6 +19,7 @@ import {
   type BuiltPayment,
   type InvoicePaymentError,
 } from '@/lib/invoice-payment-builder';
+import type { TrustlinePreflight } from '@/lib/trustline-preflight';
 import { toast } from 'sonner';
 import { Wallet, Loader2, CheckCircle, X } from 'lucide-react';
 import { invoiceApi } from '@/lib/api';
@@ -162,6 +164,7 @@ export default function PaymentButton({
   onError,
 }: PaymentButtonProps) {
   const [loading, setLoading] = useState(false);
+  const [preflight, setPreflight] = useState<TrustlinePreflight | null>(null);
   const [pendingBuilt, setPendingBuilt] = useState<BuiltPayment | null>(null);
   const [signing, setSigning] = useState(false);
 
@@ -244,6 +247,29 @@ export default function PaymentButton({
     onStart?.();
 
     try {
+      // Credit assets need a payer trustline; check it before Freighter opens
+      // so a missing one blocks submit with its own state (issue #506). A
+      // Horizon outage is retryable — never a silent pass.
+      if (assetCode && assetCode.toUpperCase() !== 'XLM' && publicKey) {
+        const check = await preflightAssetTrustline(publicKey, assetCode, assetIssuer);
+        if (!check.ok) {
+          setPreflight(check);
+          toast.error(
+            check.code === 'MISSING_TRUSTLINE'
+              ? `${assetCode} trustline required`
+              : 'Balance check failed',
+            {
+              id: PAY_TOAST_ID,
+              description: check.message,
+              duration: check.code === 'MISSING_TRUSTLINE' ? 10000 : undefined,
+            }
+          );
+          onError?.(check.message || 'Payment preflight failed');
+          return;
+        }
+      }
+      setPreflight(null);
+
       // Check Freighter prerequisites before invoking the builder.
       const prereqError = await checkFreighterPrerequisites();
       if (prereqError) {
@@ -433,6 +459,31 @@ export default function PaymentButton({
           </>
         )}
       </button>
+      {preflight && !preflight.ok && (
+        <div
+          role="alert"
+          data-preflight={preflight.code}
+          className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+        >
+          <span className="font-semibold block mb-0.5">
+            {preflight.code === 'MISSING_TRUSTLINE'
+              ? `${assetCode} trustline required`
+              : preflight.code === 'ACCOUNT_NOT_FOUND'
+                ? 'Wallet account not funded'
+                : 'Balance check failed'}
+          </span>
+          <span>{preflight.message}</span>
+          {preflight.retryable && (
+            <button
+              type="button"
+              onClick={handlePayment}
+              className="mt-2 block text-xs font-medium underline"
+            >
+              Retry the balance check
+            </button>
+          )}
+        </div>
+      )}
     </>
   );
 }

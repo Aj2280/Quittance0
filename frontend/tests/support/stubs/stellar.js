@@ -22,6 +22,7 @@ export const readFreighterSession = async () => ({
 });
 export const stopFreighterWalletWatcher = () => () => {};
 export const getAccountBalance = async () => [];
+export const preflightAssetTrustline = async () => ({ ok: true, code: 'OK' });
 export const sendPayment = async () => '';
 export const loadAccount = async () => ({
   id: 'STUB',
@@ -62,6 +63,7 @@ const stellarExports = {
   requestWalletAccess,
   getUserPublicKey,
   getAccountBalance,
+  preflightAssetTrustline,
   sendPayment,
   loadAccount,
   assertFreighterReady,
