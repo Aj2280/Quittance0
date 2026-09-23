@@ -81,40 +81,40 @@ let cachedBundle = null;
 function loadBundle() {
   if (cachedBundle) return cachedBundle;
 
-  const entryPath = path.join(ROOT, 'tests', 'support', '.a11y-entry.jsx');
-  fs.writeFileSync(entryPath, ENTRY_SOURCE);
+  // `stdin` keeps the entry virtual: a shared temp file raced whenever two
+  // test files built the bundle at the same time (issue #508 tests).
+  const result = esbuild.buildSync({
+    stdin: {
+      contents: ENTRY_SOURCE,
+      resolveDir: ROOT,
+      loader: 'jsx',
+      sourcefile: 'a11y-entry.jsx',
+    },
+    absWorkingDir: ROOT,
+    bundle: true,
+    write: false,
+    format: 'cjs',
+    platform: 'node',
+    jsx: 'automatic',
+    alias: ALIASES,
+    // React itself is shared with the test process, so the components mount
+    // into the same renderer the test drives.
+    external: ['react', 'react-dom'],
+    tsconfig: 'tsconfig.json',
+    define: {
+      'process.env.NEXT_PUBLIC_STELLAR_NETWORK': '"TESTNET"',
+      'process.env.NEXT_PUBLIC_API_URL': '"http://127.0.0.1:3001/api"',
+    },
+    logLevel: 'silent',
+  });
 
-  try {
-    const result = esbuild.buildSync({
-      entryPoints: [path.relative(ROOT, entryPath)],
-      absWorkingDir: ROOT,
-      bundle: true,
-      write: false,
-      format: 'cjs',
-      platform: 'node',
-      jsx: 'automatic',
-      alias: ALIASES,
-      // React itself is shared with the test process, so the components mount
-      // into the same renderer the test drives.
-      external: ['react', 'react-dom'],
-      tsconfig: 'tsconfig.json',
-      define: {
-        'process.env.NEXT_PUBLIC_STELLAR_NETWORK': '"TESTNET"',
-        'process.env.NEXT_PUBLIC_API_URL': '"http://127.0.0.1:3001/api"',
-      },
-      logLevel: 'silent',
-    });
+  const compiled = new Module('a11y-bundle');
+  compiled.filename = path.join(ROOT, 'a11y-bundle.js');
+  compiled.paths = Module._nodeModulePaths(ROOT);
+  compiled._compile(result.outputFiles[0].text, compiled.filename);
 
-    const compiled = new Module('a11y-bundle');
-    compiled.filename = path.join(ROOT, 'a11y-bundle.js');
-    compiled.paths = Module._nodeModulePaths(ROOT);
-    compiled._compile(result.outputFiles[0].text, compiled.filename);
-
-    cachedBundle = compiled.exports;
-    return cachedBundle;
-  } finally {
-    fs.rmSync(entryPath, { force: true });
-  }
+  cachedBundle = compiled.exports;
+  return cachedBundle;
 }
 
 /** Globals React DOM expects to find on the host. */
