@@ -28,6 +28,13 @@ export interface PayPageInvoice {
 
 export interface PayPagePaymentInfo {
   stellarQrCode?: string;
+  /** The full SEP-0007 URI the QR was built from — copyable payer text. */
+  stellarUri?: string;
+  /**
+   * False when the URI outgrew the QR payload budget and the image encodes
+   * the HTTPS pay link instead (issue #510).
+   */
+  stellarQrEncodesUri?: boolean;
   paymentUrl?: string;
   statusPollingIntervalMs?: number;
 }
