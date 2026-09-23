@@ -5,6 +5,7 @@ import {
   failure,
   verifyHorizonPayment,
 } from './payment-verification';
+import { fitsStellarTextMemo } from '../../../shared/memo';
 import type {
   ExpectedPayment,
   VerificationResult,
@@ -313,6 +314,9 @@ class StellarService {
     assetIssuer?: string
   ): Promise<string> {
     try {
+      if (!fitsStellarTextMemo(memo)) {
+        throw new Error('memo exceeds the 28-byte Stellar text memo limit');
+      }
       const sourceKeypair = getSellerKeypair();
       const sourceAccount = await this.loadAccount(sourceKeypair.publicKey());
 
