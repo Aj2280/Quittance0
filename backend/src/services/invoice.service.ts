@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { InvoiceIdCollisionError, MemoCollisionError } from '../domain/payment-attribution';
 import { pool } from '../config/database';
 import { generateInvoiceMemo } from '../utils/memo';
 import { CreateInvoiceInput } from '../utils/validation';
@@ -65,7 +66,6 @@ export class InvoiceService {
       throw new Error('Seller public key is required');
     }
 
-    const id = uuidv4();
     const memo = generateInvoiceMemo();
     const expiresAt = calculateInvoiceExpiry(input.expiresInDays);
 
@@ -84,41 +84,58 @@ export class InvoiceService {
       RETURNING *
     `;
 
-    const values = [
-      id,
-      input.sellerPublicKey,
-      input.sellerName || null,
-      input.sellerEmail || null,
-      input.amount,
-      (input.assetCode || 'XLM').toUpperCase(),
-      input.assetIssuer || null,
-      memo,
-      input.description || null,
-      input.customerName || null,
-      input.customerEmail || null,
-      'PENDING',
-      expiresAt,
-      input.idempotencyKey || null,
-    ];
+    // The public id is the pay link itself (issue #512): a collision must fail
+    // the insert, not overwrite another invoice's destination. UUIDv4 makes a
+    // repeat vanishingly rare, but the constraint is the only thing that makes
+    // "unguessable" also "unique", so draw again once and refuse after that.
+    // `memo` is also unique — a memo 23505 is reported as such, not as an id
+    // collision. An idempotent replay returns the original row instead.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const id = uuidv4();
+      const values = [
+        id,
+        input.sellerPublicKey,
+        input.sellerName || null,
+        input.sellerEmail || null,
+        input.amount,
+        (input.assetCode || 'XLM').toUpperCase(),
+        input.assetIssuer || null,
+        memo,
+        input.description || null,
+        input.customerName || null,
+        input.customerEmail || null,
+        'PENDING',
+        expiresAt,
+        input.idempotencyKey || null,
+      ];
 
-    try {
-      const result = await this.db.query(query, values);
-      if (result.rows.length === 0) {
-        const existing = await this.db.query(
-          'SELECT * FROM invoices WHERE seller_public_key = $1 AND idempotency_key = $2',
-          [input.sellerPublicKey, input.idempotencyKey]
-        );
-        if (existing.rows.length === 0) {
-          throw new Error('Idempotent replay lookup found no original invoice');
+      try {
+        const result = await this.db.query(query, values);
+        if (result.rows.length === 0) {
+          const existing = await this.db.query(
+            'SELECT * FROM invoices WHERE seller_public_key = $1 AND idempotency_key = $2',
+            [input.sellerPublicKey, input.idempotencyKey]
+          );
+          if (existing.rows.length === 0) {
+            throw new Error('Idempotent replay lookup found no original invoice');
+          }
+          return this.mapRowToInvoice(existing.rows[0]);
         }
-        return this.mapRowToInvoice(existing.rows[0]);
+        console.log('✅ Invoice created:', result.rows[0].id);
+        return this.mapRowToInvoice(result.rows[0]);
+      } catch (error: any) {
+        if (error?.code === '23505') {
+          const onId = !error.constraint || /pkey|id/i.test(String(error.constraint));
+          if (!onId) throw new MemoCollisionError(memo);
+          if (attempt === 0) continue;
+          throw new InvoiceIdCollisionError(id);
+        }
+        console.error('Error creating invoice:', error);
+        throw new Error(`Failed to create invoice: ${error.message}`);
       }
-      console.log('✅ Invoice created:', result.rows[0].id);
-      return this.mapRowToInvoice(result.rows[0]);
-    } catch (error: any) {
-      console.error('Error creating invoice:', error);
-      throw new Error(`Failed to create invoice: ${error.message}`);
     }
+
+    throw new InvoiceIdCollisionError('unreachable');
   }
 
   /**

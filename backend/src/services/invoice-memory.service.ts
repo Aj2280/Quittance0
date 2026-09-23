@@ -1,4 +1,4 @@
-import { MemoCollisionError } from '../domain/payment-attribution';
+import { InvoiceIdCollisionError, MemoCollisionError } from '../domain/payment-attribution';
 import { generateInvoiceMemo } from '../utils/memo';
 import { generatePublicInvoiceId } from '../utils/memory-public-id';
 import { CreateInvoiceInput } from '../utils/validation';
@@ -16,13 +16,15 @@ import type { MarkAsPaidOptions, PayerInfo } from '../storage/invoice-storage';
  * a per-millisecond random suffix a second draw is already generous; the point
  * of the bound is to fail loudly instead of looping.
  */
-const MEMO_DRAW_ATTEMPTS = 3;
+const DRAW_ATTEMPTS = 3;
 
 export class InvoiceMemoryService {
   constructor(
     private readonly storage: MemoryStorage = memoryStorage,
     /** Injectable so the collision path is testable without waiting for one. */
-    private readonly nextMemo: () => string = generateInvoiceMemo
+    private readonly nextMemo: () => string = generateInvoiceMemo,
+    /** Injectable so the id-collision path is testable without waiting for one. */
+    private readonly nextId: () => string = generatePublicInvoiceId
   ) {}
 
   async createInvoice(input: CreateInvoiceInput): Promise<StoredInvoice> {
@@ -43,7 +45,7 @@ export class InvoiceMemoryService {
       }
     }
 
-    const id = generatePublicInvoiceId();
+    const id = this.drawUnusedId();
     const memo = this.drawUnusedMemo();
     const expiresAt = calculateInvoiceExpiry(input.expiresInDays);
 
@@ -77,7 +79,7 @@ export class InvoiceMemoryService {
 
     for (
       let attempt = 1;
-      attempt < MEMO_DRAW_ATTEMPTS && this.storage.hasMemo(candidate);
+      attempt < DRAW_ATTEMPTS && this.storage.hasMemo(candidate);
       attempt++
     ) {
       candidate = this.nextMemo();
@@ -85,6 +87,29 @@ export class InvoiceMemoryService {
 
     if (this.storage.hasMemo(candidate)) {
       throw new MemoCollisionError(candidate);
+    }
+
+    return candidate;
+  }
+
+  /**
+   * Draw a public id no live invoice holds (issue #512). The id is the pay
+   * link: a silent overwrite would hand a payer an existing invoice's
+   * destination, so an exhausted draw refuses creation instead.
+   */
+  private drawUnusedId(): string {
+    let candidate = this.nextId();
+
+    for (
+      let attempt = 1;
+      attempt < DRAW_ATTEMPTS && this.storage.getInvoiceById(candidate);
+      attempt++
+    ) {
+      candidate = this.nextId();
+    }
+
+    if (this.storage.getInvoiceById(candidate)) {
+      throw new InvoiceIdCollisionError(candidate);
     }
 
     return candidate;
