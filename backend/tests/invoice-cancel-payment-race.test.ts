@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 import type { Request, Response } from 'express';
 import { createInvoiceHandlers } from '../src/routes/invoice.handlers.ts';
+import { PaymentClaimError } from '../src/domain/payment-attribution.ts';
 import { InvoiceMemoryService } from '../src/services/invoice-memory.service.ts';
 import { InvoiceService } from '../src/services/invoice.service.ts';
 import type { Queryable } from '../src/services/invoice.service.ts';
@@ -172,14 +173,33 @@ class FakePostgresDb implements Queryable {
       return { rows: [{ ...row }], rowCount: 1 };
     }
 
+    if (sql.startsWith('SELECT id FROM invoices WHERE payment_tx_hash =')) {
+      const holder = this.rows.filter(row => row.payment_tx_hash === params[0]);
+      return { rows: holder.map(row => ({ ...row })), rowCount: holder.length };
+    }
+
     if (sql.startsWith("UPDATE invoices SET status = 'PAID'") || sql.startsWith('WITH settled AS')) {
+      // Durable claim lock: the partial unique index on payment_tx_hash
+      // refuses a second invoice claiming the same transaction (#501).
+      const claimed = this.rows.find(
+        candidate => candidate.payment_tx_hash === params[1] && candidate.id !== params[0]
+      );
+      if (claimed) {
+        const violation: any = new Error('duplicate key value violates unique constraint');
+        violation.code = '23505';
+        violation.constraint = 'uq_invoices_payment_tx_hash';
+        throw violation;
+      }
       const row = this.rows.find((candidate) => candidate.id === params[0]);
-      const settledAt = params[5] ? new Date(params[5]) : new Date();
+      const settledAt = params[5] ? new Date(params[5]) : null;
       const canSettle =
         row &&
+        settledAt &&
+        Number.isFinite(settledAt.getTime()) &&
         (
-          (row.status === 'PENDING' && new Date(row.expires_at).getTime() > Date.now()) ||
-          (row.status === 'CANCELLED' && row.cancelled_at && Number.isFinite(settledAt.getTime()))
+          row.status === 'PENDING' ||
+          row.status === 'EXPIRED' ||
+          (row.status === 'CANCELLED' && row.cancelled_at)
         );
 
       if (!row || !canSettle) {
@@ -190,6 +210,18 @@ class FakePostgresDb implements Queryable {
       const afterCancel =
         priorStatus === 'CANCELLED' &&
         settledAt.getTime() >= new Date(row.cancelled_at).getTime();
+      const expiresAt = row.expires_at ? new Date(row.expires_at) : null;
+      const afterExpiry = expiresAt
+        ? settledAt.getTime() >= expiresAt.getTime()
+        : priorStatus === 'EXPIRED';
+      const settlementContext =
+        priorStatus === 'CANCELLED'
+          ? afterCancel ? 'AFTER_CANCEL' : 'ON_TIME'
+          : afterExpiry ? 'AFTER_EXPIRY' : 'ON_TIME';
+      const warningCode =
+        priorStatus === 'CANCELLED'
+          ? afterCancel ? 'PAYMENT_RECEIVED_AFTER_CANCEL' : null
+          : afterExpiry ? 'PAYMENT_RECEIVED_AFTER_EXPIRY' : null;
 
       Object.assign(row, {
         status: 'PAID',
@@ -199,9 +231,9 @@ class FakePostgresDb implements Queryable {
         payer_email: params[4],
         paid_at: new Date(),
         settled_at: settledAt,
-        settlement_context: afterCancel ? 'AFTER_CANCEL' : 'ON_TIME',
-        prior_status: priorStatus === 'CANCELLED' ? 'CANCELLED' : null,
-        late_payment_warning_code: afterCancel ? 'PAYMENT_RECEIVED_AFTER_CANCEL' : null,
+        settlement_context: settlementContext,
+        prior_status: priorStatus !== 'PENDING' || afterExpiry ? priorStatus : null,
+        late_payment_warning_code: warningCode,
       });
       this.events.push({
         invoiceId: row.id,
@@ -213,6 +245,7 @@ class FakePostgresDb implements Queryable {
           settlementContext: row.settlement_context,
           priorStatus: row.prior_status,
           latePaymentWarningCode: row.late_payment_warning_code,
+          ...(params[6] ? { destinationMuxedId: params[6] } : {}),
         },
       });
       return { rows: [{ ...row }], rowCount: 1 };
@@ -370,6 +403,85 @@ function runManualVerifySuite(name: string, createStorage: () => InvoiceStorage)
       assert.equal(stored?.status, 'PAID');
       assert.equal(stored?.paymentTxHash, TX_HASH);
     });
+
+    it('settles a payment whose ledger close time passed expiresAt as AFTER_EXPIRY', async () => {
+      const invoice = await createInvoice();
+      const settledAt = isoOffset(invoice.expiresAt, 1000);
+      transaction = paymentTransaction({ memo: invoice.memo, createdAt: settledAt });
+
+      const verified = await call(
+        handlers().verifyPayment,
+        createReq({ params: { id: invoice.id }, body: { txHash: TX_HASH } })
+      );
+
+      assert.equal(verified.statusCode, 200, JSON.stringify(verified.body));
+      assert.equal(verified.body.code, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
+      assert.equal(verified.body.warning, 'Payment was received after this invoice expired.');
+      assert.equal(verified.body.data.status, 'PAID');
+      assert.equal(verified.body.data.settlementContext, 'AFTER_EXPIRY');
+      assert.equal(new Date(verified.body.data.settledAt).toISOString(), settledAt);
+      assert.equal(verified.body.data.priorStatus, 'PENDING');
+      assert.equal(verified.body.data.latePaymentWarningCode, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
+    });
+
+    it('settles a payment on an already-EXPIRED invoice as AFTER_EXPIRY', async () => {
+      const invoice = await createInvoice();
+      await storage.markExpiredInvoices(new Date(isoOffset(invoice.expiresAt, 1000)));
+      const settledAt = isoOffset(invoice.expiresAt, 1000);
+      transaction = paymentTransaction({ memo: invoice.memo, createdAt: settledAt });
+
+      const verified = await call(
+        handlers().verifyPayment,
+        createReq({ params: { id: invoice.id }, body: { txHash: TX_HASH } })
+      );
+
+      assert.equal(verified.statusCode, 200, JSON.stringify(verified.body));
+      assert.equal(verified.body.code, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
+      assert.equal(verified.body.data.status, 'PAID');
+      assert.equal(verified.body.data.settlementContext, 'AFTER_EXPIRY');
+      assert.equal(verified.body.data.priorStatus, 'EXPIRED');
+      assert.equal(verified.body.data.latePaymentWarningCode, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
+    });
+
+    it('keeps a payment included before expiry ON_TIME when detected after the sweep', async () => {
+      const invoice = await createInvoice();
+      await storage.markExpiredInvoices(new Date(isoOffset(invoice.expiresAt, 1000)));
+      const settledAt = isoOffset(invoice.expiresAt, -1000);
+      transaction = paymentTransaction({ memo: invoice.memo, createdAt: settledAt });
+
+      const verified = await call(
+        handlers().verifyPayment,
+        createReq({ params: { id: invoice.id }, body: { txHash: TX_HASH } })
+      );
+
+      assert.equal(verified.statusCode, 200, JSON.stringify(verified.body));
+      assert.equal(verified.body.code, undefined);
+      assert.equal(verified.body.warning, undefined);
+      assert.equal(verified.body.data.status, 'PAID');
+      assert.equal(verified.body.data.settlementContext, 'ON_TIME');
+      assert.equal(new Date(verified.body.data.settledAt).toISOString(), settledAt);
+      assert.equal(verified.body.data.priorStatus, 'EXPIRED');
+      assert.ok(!verified.body.data.latePaymentWarningCode);
+    });
+
+    it('refuses to settle when the transaction close time is missing', async () => {
+      const invoice = await createInvoice();
+      const tx = paymentTransaction({ memo: invoice.memo, createdAt: new Date().toISOString() });
+      delete tx.transaction.created_at;
+      transaction = tx;
+
+      const verified = await call(
+        handlers().verifyPayment,
+        createReq({ params: { id: invoice.id }, body: { txHash: TX_HASH } })
+      );
+
+      assert.equal(verified.statusCode, 503, JSON.stringify(verified.body));
+      assert.equal(verified.body.code, 'TRANSACTION_CLOSE_TIME_UNAVAILABLE');
+
+      const stored = await storage.getInvoiceById(invoice.id);
+      assert.equal(stored?.status, 'PENDING');
+      assert.equal(Boolean(stored?.paymentTxHash), false);
+    });
   });
 }
 
@@ -490,3 +602,68 @@ describe('cancel versus payment monitor attribution on memory storage', () => {
 
 runManualVerifySuite('in-memory storage', createMemoryStorage);
 runManualVerifySuite('postgres storage double', createPostgresStorage);
+
+// Issue #501: one transaction hash settles at most one invoice. The in-memory
+// engine enforces it through PaymentClaimIndex; the Postgres engine through the
+// partial unique index on payment_tx_hash, mapped to the same typed rejection.
+function runClaimLockSuite(name: string, createStorage: () => InvoiceStorage) {
+  describe(`one transaction settles one invoice on ${name}`, () => {
+    let storage: InvoiceStorage;
+
+    const createInvoice = () =>
+      storage.createInvoice({
+        sellerPublicKey: SELLER,
+        amount: 42.5,
+        assetCode: 'XLM',
+        description: 'Claim-lock race',
+      });
+
+    beforeEach(() => {
+      storage = createStorage();
+    });
+
+    it('rejects a second invoice claiming an already-settled transaction', async () => {
+      const first = await createInvoice();
+      const second = await createInvoice();
+      assert.notEqual(first.memo, second.memo);
+      const settledAt = new Date();
+
+      const settled = await storage.markAsPaid(first.id, TX_HASH, PAYER, undefined, {
+        settledAt,
+      });
+      assert.equal(settled.status, 'PAID');
+      assert.equal(settled.paymentTxHash, TX_HASH);
+
+      const rejection = await storage
+        .markAsPaid(second.id, TX_HASH, PAYER, undefined, { settledAt: new Date() })
+        .then(
+          () => null,
+          (error: unknown) => error
+        );
+      assert.ok(rejection instanceof PaymentClaimError, `expected PaymentClaimError, got ${rejection}`);
+      assert.equal(rejection.code, 'TX_HASH_ALREADY_USED');
+      assert.equal(rejection.txHash, TX_HASH);
+      assert.equal(rejection.settledInvoiceId, first.id);
+
+      const stored = await storage.getInvoiceById(second.id);
+      assert.equal(stored.status, 'PENDING');
+      assert.equal(stored.paymentTxHash ?? null, null);
+    });
+
+    it('lets two invoices settle two distinct transactions', async () => {
+      const first = await createInvoice();
+      const second = await createInvoice();
+      const settledAt = new Date();
+
+      await storage.markAsPaid(first.id, TX_HASH, PAYER, undefined, { settledAt });
+      const other = await storage.markAsPaid(second.id, TX_HASH_2, PAYER, undefined, {
+        settledAt: new Date(),
+      });
+      assert.equal(other.status, 'PAID');
+      assert.equal(other.paymentTxHash, TX_HASH_2);
+    });
+  });
+}
+
+runClaimLockSuite('in-memory storage', createMemoryStorage);
+runClaimLockSuite('postgres storage double', createPostgresStorage);

@@ -10,6 +10,7 @@
  * Horizon and hand them in. See README.md "Payment verification contract".
  */
 
+import { MuxedAccount, StrKey } from '@stellar/stellar-sdk';
 import {
   assetsMatch,
   formatAssetIdentity,
@@ -219,40 +220,116 @@ export function normalizePaymentOperation(
   return null;
 }
 
+export interface ResolvedDestination {
+  /** Underlying Ed25519 account the payment lands on. */
+  accountId: string;
+  /** Muxed id, present only when the destination was an `M...` address. */
+  muxedId?: string;
+}
+
 /**
- * Finds the payment-delivering operation for an invoice.
- * If destination is given, prioritizes an operation paying that destination.
+ * Resolve a Horizon payment destination to the account it lands on.
+ *
+ * `G...` addresses resolve to themselves. `M...` muxed addresses decode through
+ * the SDK to the base account and the muxed id — never string-sliced, since a
+ * sliced `M` could hide a different underlying account. Anything else fails
+ * closed (`null`) so a malformed destination can never coerce into a match.
+ */
+export function resolveDestinationAccount(
+  destination: string | null | undefined,
+): ResolvedDestination | null {
+  if (!destination) return null;
+  if (StrKey.isValidEd25519PublicKey(destination)) {
+    return { accountId: destination };
+  }
+  if (!StrKey.isValidMed25519PublicKey(destination)) return null;
+  try {
+    const muxed = MuxedAccount.fromAddress(destination, '0');
+    return { accountId: muxed.baseAccount().accountId(), muxedId: muxed.id() };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a payment operation's `to` lands on the invoice seller. A literal
+ * match always counts; otherwise the operation's destination resolves through
+ * muxed-account rules and the underlying `G` account is compared. The returned
+ * resolution carries the muxed id for event/proof recording, or null on no
+ * match — including malformed destinations, which fail closed.
+ */
+export function destinationMatches(
+  operationTo: string,
+  expectedDestination: string,
+): ResolvedDestination | null {
+  if (operationTo === expectedDestination) {
+    return { accountId: operationTo };
+  }
+  const resolved = resolveDestinationAccount(operationTo);
+  if (!resolved || resolved.accountId !== expectedDestination) return null;
+  return resolved;
+}
+
+/**
+ * The outcome of walking a transaction's operations for the invoice payment.
+ *
+ * A Stellar transaction can carry several operations — a `change_trust`
+ * before the pay, several payments, or a fee-bump envelope's inner ops.
+ * Verification must name exactly one payment rather than take the first:
+ * picking the wrong op can reject a legitimate payment, and silently
+ * summing or choosing between two payments to the seller would let a tx
+ * settle an invoice it never unambiguously paid.
+ */
+export type PaymentOperationSelection =
+  | { kind: 'none' }
+  | { kind: 'wrong_destination'; op: NormalizedPaymentOperation }
+  | { kind: 'ambiguous'; ops: NormalizedPaymentOperation[] }
+  | { kind: 'ok'; op: NormalizedPaymentOperation };
+
+/**
+ * Walks a transaction's operations and selects the invoice payment.
+ *
+ * Non-payment operations are ignored entirely. Payments to other
+ * destinations are ignored for attribution: when none reaches the
+ * invoice's destination the *first* payment op is still returned so the
+ * verifier can report the destination mismatch in its documented order.
+ * More than one payment to the invoice destination is ambiguous and
+ * fails closed — verification never sums or picks between them.
+ * A muxed `M...` destination matches when its underlying account is the seller.
  *
  * @param operations - List of operations from Horizon.
- * @param destination - Target payment destination.
- * @returns Normalized payment operation or null.
+ * @param destination - The invoice's seller account.
+ * @returns The selection outcome; `ok` carries the unique matching op.
  */
-export function findPaymentOperation(
+export function selectInvoicePaymentOperation(
   operations: HorizonOperationLike[],
-  destination?: string,
-): NormalizedPaymentOperation | null {
-  const candidates = (operations || [])
+  destination: string,
+): PaymentOperationSelection {
+  const payments = (operations || [])
     .map(normalizePaymentOperation)
     .filter((op): op is NormalizedPaymentOperation => op !== null);
 
-  if (candidates.length === 0) {
-    return null;
+  if (payments.length === 0) {
+    return { kind: 'none' };
   }
 
-  if (destination) {
-    const match = candidates.find((op) => op.to === destination);
-    if (match) {
-      return match;
-    }
+  const toDestination = payments.filter((op) => destinationMatches(op.to, destination) !== null);
+  if (toDestination.length > 1) {
+    return { kind: 'ambiguous', ops: toDestination };
   }
-
-  return candidates[0];
+  if (toDestination.length === 1) {
+    return { kind: 'ok', op: toDestination[0] };
+  }
+  return { kind: 'wrong_destination', op: payments[0] };
 }
 
 export interface VerifiedPayment {
   txHash: string;
   from: string;
+  /** The on-chain destination as reported by Horizon (`G...` or `M...`). */
   to: string;
+  /** Muxed id when `to` was a muxed `M...` account of the seller. */
+  toMuxedId?: string;
   amount: string;
   assetCode: string;
   assetIssuer?: string;
@@ -275,6 +352,16 @@ export interface VerifyPaymentInput {
 
 function normalizeMemo(memo: unknown): string {
   return typeof memo === 'string' ? memo : '';
+}
+
+/**
+ * Horizon reports `memo_type` as `none` | `text` | `id` | `hash` | `return`
+ * (JSON responses) or the SDK's `MEMO_*` spellings in some shapes. Anything
+ * unrecognised is returned lowercased so the caller can still fail closed.
+ */
+function normalizeMemoType(memoType: unknown): string | undefined {
+  if (typeof memoType !== 'string' || memoType === '') return undefined;
+  return memoType.toLowerCase().replace(/^memo_/, '');
 }
 
 export function transactionSettlementTime(transaction: HorizonTransactionLike): Date | undefined {
@@ -326,16 +413,34 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
     return failure('NETWORK_MISMATCH');
   }
 
-  const paymentOp = findPaymentOperation(operations, expected.destination);
-  if (!paymentOp) {
+  const selection = selectInvoicePaymentOperation(operations, expected.destination);
+
+  if (selection.kind === 'none') {
     return failure('NO_PAYMENT_OPERATION');
+  }
+  if (selection.kind === 'ambiguous') {
+    return failure('AMBIGUOUS_PAYMENT_OPERATION');
+  }
+
+  const paymentOp = selection.op;
+
+  // Invoice memos are Stellar text memos. A hash, id or return memo is never
+  // coerced into the string comparison: it is rejected outright so a payer
+  // cannot satisfy the memo check with bytes that were never text.
+  const txMemoType = normalizeMemoType(transaction?.memo_type);
+  if (txMemoType && txMemoType !== 'text' && txMemoType !== 'none') {
+    return failure('MEMO_TYPE_MISMATCH');
   }
 
   if (normalizeMemo(transaction?.memo) !== normalizeMemo(expected.memo)) {
     return failure('MEMO_MISMATCH');
   }
 
-  if (paymentOp.to !== expected.destination) {
+  // Muxed `M...` destinations settle when the underlying `G` account is the
+  // invoice seller; anything else — including malformed muxed strings — fails
+  // closed here.
+  const destinationResolution = destinationMatches(paymentOp.to, expected.destination);
+  if (!destinationResolution) {
     return failure('DESTINATION_MISMATCH');
   }
 
@@ -366,6 +471,7 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
       txHash: hashCheck.value,
       from: paymentOp.from,
       to: paymentOp.to,
+      ...(destinationResolution.muxedId ? { toMuxedId: destinationResolution.muxedId } : {}),
       amount: paymentOp.amount,
       assetCode: paidAssetCode,
       assetIssuer: paymentOp.assetType === 'native' ? undefined : paymentOp.assetIssuer,

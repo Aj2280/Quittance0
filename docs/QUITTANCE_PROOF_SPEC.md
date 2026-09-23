@@ -20,11 +20,11 @@ The formal schema definition resides at `frontend/lib/quittance-proof.schema.jso
 | `status` | `'PAID' \| 'PENDING' \| 'EXPIRED' \| 'CANCELLED'` | Lifecycle settlement status. |
 | `issuedAt` | `string` | ISO-8601 UTC timestamp of creation. |
 | `dueAt` | `string` | ISO-8601 UTC timestamp of expiration. |
-| `settledAt` | `string \| null` | ISO-8601 UTC timestamp of settlement or null. |
+| `settledAt` | `string \| null` | ISO-8601 UTC ledger close time of the settlement transaction, or null. |
 | `seller` | `string` | Stellar public key (`G...`) of payee. |
 | `payer` | `string \| null` | Stellar public key (`G...`) of payer, or null if unrecorded. |
 | `payment` | `object` | Settlement transaction details (hash, memo, amount, asset, explorer). |
-| `verification` | `object` | Verification status, method, and audit timestamp. |
+| `verification` | `object` | Verification status, method, audit timestamp (`checkedAt`), `settlementContext` (`'ON_TIME' \| 'AFTER_EXPIRY' \| 'AFTER_CANCEL' \| null`), and `latePaymentWarningCode` (`string \| null`). |
 | `document` | `object` | Generation metadata (UTC timestamp and issuing client). |
 
 ---

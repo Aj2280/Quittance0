@@ -43,7 +43,7 @@ export const SEP7_RESEARCH_VECTORS: Sep7ResearchVector[] = [
     recommendation: 'accept',
     current: 'accept',
     expectedUri:
-      `web+stellar:pay?destination=${VALID_DESTINATION}&amount=5.25&asset_code=USDC&asset_issuer=${VALID_ASSET_ISSUER}&memo=Q-382-2&memo_type=MEMO_TEXT`,
+      `web+stellar:pay?destination=${VALID_DESTINATION}&amount=5.2500000&asset_code=USDC&asset_issuer=${VALID_ASSET_ISSUER}&memo=Q-382-2&memo_type=MEMO_TEXT`,
     walletNote: 'Wallet may use a path payment, but the destination must receive this exact asset.',
   },
   {
@@ -52,22 +52,24 @@ export const SEP7_RESEARCH_VECTORS: Sep7ResearchVector[] = [
     recommendation: 'accept',
     current: 'accept',
     expectedUri:
-      `web+stellar:pay?destination=${VALID_DESTINATION}&amount=1&memo=1234567890123456789012345678&memo_type=MEMO_TEXT`,
+      `web+stellar:pay?destination=${VALID_DESTINATION}&amount=1.0000000&memo=1234567890123456789012345678&memo_type=MEMO_TEXT`,
     walletNote: 'MEMO_TEXT allows at most 28 UTF-8 bytes.',
   },
   {
     name: '29-byte text memo',
     input: { destination: VALID_DESTINATION, amount: '1', memo: '12345678901234567890123456789' },
     recommendation: 'reject',
-    current: 'gap',
-    walletNote: 'Current formatter emits it, but a wallet cannot build a valid Stellar text memo.',
+    current: 'reject',
+    expectedError: 'memo exceeds the 28-byte Stellar text memo limit',
+    walletNote: 'The formatter rejects it: a wallet cannot build a valid Stellar text memo.',
   },
   {
     name: 'eight emoji memo is 32 UTF-8 bytes',
     input: { destination: VALID_DESTINATION, amount: '1', memo: '😀😀😀😀😀😀😀😀' },
     recommendation: 'reject',
-    current: 'gap',
-    walletNote: 'Validate UTF-8 byte length rather than JavaScript character count.',
+    current: 'reject',
+    expectedError: 'memo exceeds the 28-byte Stellar text memo limit',
+    walletNote: 'The formatter validates UTF-8 byte length rather than JavaScript character count.',
   },
   {
     name: 'missing amount on an invoice',

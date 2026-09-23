@@ -18,6 +18,7 @@ import FreighterInstallPrompt from '@/components/FreighterInstallPrompt';
 import MobilePaymentFallback from '@/components/MobilePaymentFallback';
 import ApiErrorState from '@/components/ApiErrorState';
 import { copyToClipboard, formatAmount } from '@/lib/utils';
+import { canonicalAmount } from '@/lib/stroop-amount';
 import { emailPaymentProof, openInvoicePDF, shareInvoiceByEmail } from '@/lib/export';
 import { getPayPageView, getPayPageWalletGate } from '@/lib/payment-page-state';
 import { PAYMENT_STATUS_POLL_INTERVAL_MS } from '@/lib/api';
@@ -117,7 +118,10 @@ export default function PaymentPage() {
     }
   };
 
-  const amountLabel = describeAmount(formatAmount(invoice.amount, 7), invoice.assetCode);
+  const amountLabel = describeAmount(
+    canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7),
+    invoice.assetCode
+  );
 
   return (
     <div className="min-h-screen bg-logo-pattern relative py-8 sm:py-12 px-4">
@@ -210,9 +214,14 @@ export default function PaymentPage() {
                       title=""
                       size={220}
                       description={`a request to pay ${amountLabel} with memo ${invoice.memo}`}
+                      copyValue={
+                        page.paymentInfo?.stellarUri || page.paymentInfo?.paymentUrl || undefined
+                      }
                     />
                     <p className="text-sm text-gray-700 text-center mt-4">
-                      Scan with your Stellar wallet app to pay instantly
+                      {page.paymentInfo?.stellarQrEncodesUri === false
+                        ? 'Scan to open the pay link, or copy the Stellar URI above into your wallet'
+                        : 'Scan with your Stellar wallet app to pay instantly'}
                     </p>
                   </section>
                   {isMobile && !showDesktopWalletAnyway ? (

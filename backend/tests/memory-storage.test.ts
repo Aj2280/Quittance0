@@ -142,7 +142,8 @@ describe('MemoryStorage parity with Postgres invoice columns', () => {
       pending.id,
       'abcd'.repeat(16),
       payerA,
-      { payerName: 'Nayib Payer', payerEmail: 'nayib@payer.example' }
+      { payerName: 'Nayib Payer', payerEmail: 'nayib@payer.example' },
+      { settledAt: new Date() }
     );
 
     assert.equal(paid?.status, 'PAID');
@@ -160,7 +161,7 @@ describe('MemoryStorage parity with Postgres invoice columns', () => {
     assert.equal(secondTry, undefined, 'already-PAID invoice must not accept a second markAsPaid');
   });
 
-  it('markAsPaid returns undefined once expiresAt passes, same guard as Postgres', () => {
+  it('markAsPaid settles an expired invoice with AFTER_EXPIRY context, same as Postgres', () => {
     const almostExpired = store.createInvoice({
       sellerPublicKey: sellerA,
       amount: 5,
@@ -168,11 +169,13 @@ describe('MemoryStorage parity with Postgres invoice columns', () => {
       expiresAt: new Date(Date.now() - 1),
     });
 
-    const result = store.markAsPaid(almostExpired.id, '1234'.repeat(16), payerA);
-    assert.equal(result, undefined);
-
-    const reget = store.getInvoiceById(almostExpired.id);
-    assert.equal(reget?.status, 'EXPIRED');
+    const result = store.markAsPaid(almostExpired.id, '1234'.repeat(16), payerA, undefined, {
+      settledAt: new Date(),
+    });
+    assert.equal(result?.status, 'PAID');
+    assert.equal(result?.settlementContext, 'AFTER_EXPIRY');
+    assert.equal(result?.priorStatus, 'EXPIRED');
+    assert.equal(result?.latePaymentWarningCode, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
   });
 
   it('cancelInvoice only succeeds for PENDING status, then status is CANCELLED', () => {
@@ -208,7 +211,7 @@ describe('MemoryStorage parity with Postgres invoice columns', () => {
   it('getAllInvoices + getStats return seller-scoped rows with parity data', () => {
     const a1 = store.createInvoice({ sellerPublicKey: sellerA, amount: 100, assetCode: 'XLM', memo: 'INV-A1' });
     store.createInvoice({ sellerPublicKey: sellerA, amount: 200, assetCode: 'XLM', memo: 'INV-A2' });
-    store.markAsPaid(a1.id, 'aaaa'.repeat(16), payerA, { payerName: 'A', payerEmail: 'a@a.example' });
+    store.markAsPaid(a1.id, 'aaaa'.repeat(16), payerA, { payerName: 'A', payerEmail: 'a@a.example' }, { settledAt: new Date() });
     store.createInvoice({ sellerPublicKey: sellerB, amount: 999, assetCode: 'XLM', memo: 'INV-B1' });
 
     const onlyA = store.getAllInvoices().filter(inv => inv.sellerPublicKey === sellerA);

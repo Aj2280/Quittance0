@@ -44,6 +44,21 @@ export interface StoredInvoice {
   latePaymentWarningCode?: LatePaymentWarningCode;
   expiresAt: Date;
   metadata?: any;
+  /** Internal dedupe key for replayed creates (issue #514); never payer-facing. */
+  idempotencyKey?: string;
+}
+
+/**
+ * One row of the payment_events audit feed (issue #515): the attribution and
+ * verify paths write these; the workspace reads them through a seller-scoped
+ * endpoint. `eventData` is a JSON payload whose shape depends on eventType.
+ */
+export interface PaymentEventRecord {
+  id: string;
+  invoiceId: string;
+  eventType: string;
+  eventData?: Record<string, unknown> | null;
+  createdAt: Date;
 }
 
 export interface PayerInfo {
@@ -54,6 +69,8 @@ export interface PayerInfo {
 export interface MarkAsPaidOptions {
   /** Horizon ledger close time for the matching transaction. */
   settledAt?: Date;
+  /** Muxed id when the payment went to a muxed `M...` account of the seller. */
+  destinationMuxedId?: string;
 }
 
 /**
@@ -87,4 +104,15 @@ export interface InvoiceStorage {
   markExpiredInvoices(now?: Date): Promise<number>;
   /** Returns total count of invoices currently stored. */
   countInvoices?(): Promise<number>;
+  /**
+   * Audit feed for one invoice (issue #515). Callers must authorize before
+   * exposing rows — events are seller-workspace data, not public.
+   */
+  getPaymentEvents?(invoiceId: string): Promise<PaymentEventRecord[]>;
+  /** Append one lifecycle/audit event row for an invoice. */
+  logPaymentEvent?(
+    invoiceId: string,
+    eventType: string,
+    eventData?: Record<string, unknown> | null
+  ): Promise<void>;
 }

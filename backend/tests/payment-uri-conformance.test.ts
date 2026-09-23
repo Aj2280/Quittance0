@@ -46,9 +46,14 @@ describe('payment URI — what the formatter emits today', () => {
 });
 
 describe('payment URI — the gaps, proven against the SDK', () => {
-  it('emits an amount the SDK will not build a payment from', () => {
-    const result = formatQrPaymentPayload({ destination: VALID_DESTINATION, amount: '1.12345678' });
-    assert.match(result.uri, /amount=1\.12345678/);
+  it('refuses an amount the SDK would not build a payment from', () => {
+    // Formerly the eighth decimal was emitted anyway and the SDK refused it at
+    // payment-build time. The formatter now refuses first, so nothing beyond
+    // the compared stroops ever reaches a wallet.
+    assert.throws(
+      () => formatQrPaymentPayload({ destination: VALID_DESTINATION, amount: '1.12345678' }),
+      /at most 7 decimal places/
+    );
 
     assert.throws(
       () =>
@@ -58,31 +63,38 @@ describe('payment URI — the gaps, proven against the SDK', () => {
           amount: '1.12345678',
         }),
       /at most 7 digits after the decimal/,
-      'the ceiling is seven decimals; the URI carries eight'
+      'the ceiling is seven decimals; the SDK agrees'
     );
   });
 
-  it('emits a memo the SDK will not attach to a transaction', () => {
-    const result = formatQrPaymentPayload({
-      destination: VALID_DESTINATION,
-      amount: '25',
-      memo: MEMO_32_BYTES,
-    });
-    assert.ok(result.params.memo === MEMO_32_BYTES);
+  it('refuses a memo the SDK will not attach to a transaction', () => {
+    assert.throws(
+      () =>
+        formatQrPaymentPayload({
+          destination: VALID_DESTINATION,
+          amount: '25',
+          memo: MEMO_32_BYTES,
+        }),
+      /28-byte/,
+      'the formatter refuses before the SDK is ever reached'
+    );
 
     assert.throws(() => Memo.text(MEMO_32_BYTES), /max 28 bytes/);
   });
 
-  it('counts the memo ceiling in bytes, and emits an over-limit non-ASCII memo anyway', () => {
-    const result = formatQrPaymentPayload({
-      destination: VALID_DESTINATION,
-      amount: '25',
-      memo: MEMO_30_BYTES_NON_ASCII,
-    });
-    assert.equal(result.params.memo, MEMO_30_BYTES_NON_ASCII);
-
+  it('counts the memo ceiling in bytes, and refuses an over-limit non-ASCII memo', () => {
     assert.equal(MEMO_30_BYTES_NON_ASCII.length, 10, 'ten characters');
     assert.equal(Buffer.byteLength(MEMO_30_BYTES_NON_ASCII), 30, 'thirty bytes');
+
+    assert.throws(
+      () =>
+        formatQrPaymentPayload({
+          destination: VALID_DESTINATION,
+          amount: '25',
+          memo: MEMO_30_BYTES_NON_ASCII,
+        }),
+      /28-byte/
+    );
     assert.throws(() => Memo.text(MEMO_30_BYTES_NON_ASCII), /max 28 bytes/);
   });
 
@@ -105,7 +117,7 @@ describe('payment URI — the gaps, proven against the SDK', () => {
 
     assert.equal('asset_code' in result.params, false);
     assert.equal('asset_issuer' in result.params, false);
-    assert.equal(result.uri, `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25`);
+    assert.equal(result.uri, `web+stellar:pay?destination=${VALID_DESTINATION}&amount=25.0000000`);
   });
 });
 
@@ -122,13 +134,10 @@ describe('payment URI — keeping the gap list honest', () => {
     }
   });
 
-  it('holds five gaps, so adding or closing one is a deliberate edit', () => {
+  it('holds two gaps, so adding or closing one is a deliberate edit', () => {
     assert.deepEqual(
       GAPS.map((c) => c.name),
       [
-        'an amount with eight decimals is emitted anyway',
-        'a memo over 28 bytes is emitted anyway',
-        'a non-ASCII memo over the byte ceiling is emitted anyway',
         'XLM with an issuer is silently downgraded to a native payment',
         'a muxed account destination is refused',
       ],

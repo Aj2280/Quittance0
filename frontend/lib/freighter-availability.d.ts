@@ -18,6 +18,8 @@ export interface WalletGateSession {
   connected?: boolean;
   publicKey?: string | null;
   network?: string | null;
+  /** Passphrase reported by Freighter's getNetwork — checked exactly when present. */
+  networkPassphrase?: string | null;
 }
 
 export function walletGate(
@@ -34,6 +36,16 @@ export function wrongNetworkMessage(
 
 export function networkMatches(
   networkOrPassphrase?: string | null,
+  expected?: string
+): boolean;
+
+/**
+ * Passphrase-strict session check: when the session carries a wallet-reported
+ * networkPassphrase it must equal the expected network's passphrase exactly;
+ * otherwise falls back to the name comparison.
+ */
+export function sessionNetworkMatches(
+  session?: Pick<WalletGateSession, 'network' | 'networkPassphrase'> | null,
   expected?: string
 ): boolean;
 export function FREIGHTER_WRONG_NETWORK_MESSAGE(targetNetwork?: string): string;

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { Account, Keypair, MuxedAccount } from '@stellar/stellar-sdk';
 import {
   VERIFICATION_MESSAGES,
   VERIFICATION_CODES,
@@ -94,6 +95,50 @@ describe('verifyHorizonPayment — happy path', () => {
     );
 
     assert.equal(result.ok, true);
+  });
+
+  it('accepts a one-stroop invoice paid as a Horizon string', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ amount: 0.0000001 }),
+        operations: [paymentOp({ amount: '0.0000001' })],
+      })
+    );
+
+    assert.equal(result.ok, true);
+  });
+
+  it('matches the Horizon string 10.0000000 against a stored 10', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ amount: 10 }),
+        operations: [paymentOp({ amount: '10.0000000' })],
+      })
+    );
+
+    assert.equal(result.ok, true);
+  });
+
+  it('accepts leading zeros in the Horizon amount string', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ amount: 42.5 }),
+        operations: [paymentOp({ amount: '0042.5000000' })],
+      })
+    );
+
+    assert.equal(result.ok, true);
+  });
+
+  it('rejects a one-stroop underpayment', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ amount: '10.0000000' }),
+        operations: [paymentOp({ amount: '9.9999999' })],
+      })
+    );
+
+    assert.equal(codeOf(result), 'AMOUNT_TOO_LOW');
   });
 
   it('accepts a non-native asset when code and issuer both match', () => {
@@ -350,6 +395,61 @@ describe('verifyHorizonPayment — check ordering', () => {
   });
 });
 
+describe('verifyHorizonPayment — muxed destinations', () => {
+  const sellerKeypair = Keypair.random();
+  const sellerG = sellerKeypair.publicKey();
+  const sellerMuxed = new MuxedAccount(new Account(sellerG, '0'), '777').accountId();
+  const otherMuxed = new MuxedAccount(new Account(Keypair.random().publicKey(), '0'), '888').accountId();
+
+  function muxedInput(to: string): VerifyPaymentInput {
+    return input({
+      expected: expected({ destination: sellerG }),
+      operations: [paymentOp({ to })],
+    });
+  }
+
+  it('settles a payment to a muxed M... account of the seller', () => {
+    const result = verifyHorizonPayment(muxedInput(sellerMuxed));
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.value.to, sellerMuxed);
+    assert.equal(result.value.toMuxedId, '777');
+  });
+
+  it('rejects a payment to a muxed account of someone else', () => {
+    const result = verifyHorizonPayment(muxedInput(otherMuxed));
+    assert.equal(codeOf(result), 'DESTINATION_MISMATCH');
+  });
+
+  it('fails closed on a malformed muxed destination instead of coercing it', () => {
+    for (const bad of [
+      'M' + 'A'.repeat(68),
+      sellerMuxed.slice(0, -1) + '0',
+      'MNOTREALMUXEDADDRESS',
+      'S' + sellerG.slice(1),
+    ]) {
+      assert.equal(codeOf(verifyHorizonPayment(muxedInput(bad))), 'DESTINATION_MISMATCH', bad);
+    }
+  });
+
+  it('picks the muxed seller operation over an unrelated payment', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ destination: sellerG }),
+        operations: [
+          paymentOp({ to: OTHER_ACCOUNT }),
+          paymentOp({ to: sellerMuxed }),
+        ],
+      })
+    );
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.value.toMuxedId, '777');
+  });
+});
+
 describe('checkTxHash', () => {
   it('accepts and trims a well-formed hash', () => {
     const result = checkTxHash(`  ${TX_HASH}  `);
@@ -425,6 +525,88 @@ describe('checkPayerInfo', () => {
     const notText = checkPayerInfo({ payerName: 42 } as any);
     assert.equal(notText.ok, false);
     assert.equal(notText.ok ? '' : notText.code, 'INVALID_PAYER_NAME');
+  });
+});
+
+describe('verifyHorizonPayment — multi-operation transactions (#504)', () => {
+  it('verifies a payment preceded by a change_trust operation', () => {
+    const result = verifyHorizonPayment(
+      input({
+        expected: expected({ assetCode: 'USDC', assetIssuer: USDC_ISSUER }),
+        operations: [
+          { type: 'change_trust', asset_code: 'USDC', asset_issuer: USDC_ISSUER },
+          paymentOp({
+            asset_type: 'credit_alphanum4',
+            asset_code: 'USDC',
+            asset_issuer: USDC_ISSUER,
+          }),
+        ],
+      })
+    );
+    assert.equal(result.ok, true);
+  });
+
+  it('finds the matching payment later in the operation list', () => {
+    const result = verifyHorizonPayment(
+      input({
+        operations: [
+          { type: 'manage_data', name: 'x', value: 'y' },
+          paymentOp({ to: OTHER_ACCOUNT }),
+          paymentOp(),
+        ],
+      })
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.value.to, SELLER);
+  });
+
+  it('ignores payments to other destinations when selecting the invoice op', () => {
+    // Two payment ops: only the one to the seller settles the invoice, and
+    // its amount — not the other payment's — is what gets compared.
+    const result = verifyHorizonPayment(
+      input({
+        operations: [
+          paymentOp({ to: OTHER_ACCOUNT, amount: '999.0000000' }),
+          paymentOp(),
+        ],
+      })
+    );
+    assert.equal(result.ok, true);
+  });
+
+  it('fails closed when two payments reach the invoice destination', () => {
+    const result = verifyHorizonPayment(
+      input({
+        operations: [paymentOp({ amount: '50.0000000' }), paymentOp()],
+      })
+    );
+    assert.equal(result.ok, false);
+    assert.equal(codeOf(result), 'AMBIGUOUS_PAYMENT_OPERATION');
+  });
+
+  it('fails closed on two matching payments even when each alone would pass', () => {
+    const result = verifyHorizonPayment(
+      input({ operations: [paymentOp(), paymentOp({ from: OTHER_ACCOUNT })] })
+    );
+    assert.equal(result.ok, false);
+    assert.equal(codeOf(result), 'AMBIGUOUS_PAYMENT_OPERATION');
+  });
+
+  it('still reports DESTINATION_MISMATCH when no payment reaches the seller', () => {
+    const result = verifyHorizonPayment(
+      input({ operations: [paymentOp({ to: OTHER_ACCOUNT })] })
+    );
+    assert.equal(result.ok, false);
+    assert.equal(codeOf(result), 'DESTINATION_MISMATCH');
+  });
+
+  it('reports NO_PAYMENT_OPERATION when only non-payment ops exist', () => {
+    const result = verifyHorizonPayment(
+      input({ operations: [{ type: 'change_trust' }, { type: 'manage_data' }] })
+    );
+    assert.equal(result.ok, false);
+    assert.equal(codeOf(result), 'NO_PAYMENT_OPERATION');
   });
 });
 

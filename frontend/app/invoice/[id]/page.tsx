@@ -14,6 +14,7 @@ import FreighterInstallPrompt from '@/components/FreighterInstallPrompt';
 import PaymentReceipt from '@/components/PaymentReceipt';
 import AssetLogo from '@/components/AssetLogo';
 import { formatAmount, formatDate, getTimeRemaining } from '@/lib/utils';
+import { canonicalAmount } from '@/lib/stroop-amount';
 import { MAIN_CONTENT_ID, describeAmount, statusText } from '@/lib/a11y';
 import { ArrowLeft, Share2, Loader2, X, Mail, Link2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -22,9 +23,10 @@ import ApiErrorState from '@/components/ApiErrorState';
 import { effectiveInvoiceStatus } from '@/lib/invoice-lifecycle';
 import { invoiceWorkspaceAccess } from '@/lib/invoice-workspace-access';
 import InvoiceTimeline from '@/components/InvoiceTimeline';
+import PaymentEventsFeed from '@/components/PaymentEventsFeed';
 import { invoiceSharePath } from '@/lib/invoice-share-path';
 import { shareInvoiceByEmail } from '@/lib/export';
-import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
+import { EXPECTED_WALLET_NETWORK, signInvoiceCancelMessage } from '@/lib/stellar';
 import { walletGate } from '@/lib/freighter-availability';
 import { copyWithFeedback } from '@/lib/clipboard-feedback';
 
@@ -37,12 +39,13 @@ export default function InvoiceDetailPage() {
     publicKey: storePublicKey,
     connected,
     network,
+    networkPassphrase,
     freighterAvailable,
   } = useWalletStore();
   // The gate and the acting wallet are read by the loaders below, so they
   // are computed here rather than beside the JSX they also serve.
   const gate = walletGate(
-    { freighterAvailable, connected, publicKey, network },
+    { freighterAvailable, connected, publicKey, network, networkPassphrase },
     EXPECTED_WALLET_NETWORK
   );
   const userWallet = gate.ready ? publicKey : null;
@@ -61,11 +64,17 @@ export default function InvoiceDetailPage() {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Declared before loadInvoice so the loader can present it as the workspace
+  // credential — the seller-scoped GET returns contact fields only to the
+  // invoice's own wallet (issue #503). When the wallet connects or switches,
+  // the load effect re-runs and picks up the richer shape.
+  const activeWallet = userWallet || (connected ? storePublicKey : null);
+
   const loadInvoice = useCallback(async () => {
     setLoadError(null);
     try {
       const [invoiceResult, paymentResult] = await Promise.allSettled([
-        invoiceApi.getById(id),
+        invoiceApi.getById(id, activeWallet),
         invoiceApi.getPaymentInfo(id),
       ]);
 
@@ -84,7 +93,7 @@ export default function InvoiceDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, activeWallet]);
 
   useEffect(() => {
     void loadInvoice();
@@ -128,12 +137,12 @@ export default function InvoiceDetailPage() {
     }
   };
 
-  const activeWallet = userWallet || (connected ? storePublicKey : null);
-
   const handleCancel = async () => {
     if (!window.confirm('Cancel this invoice?')) return;
     try {
-      await invoiceApi.cancel(id, activeWallet || invoice?.sellerPublicKey);
+      // Wallet proves ownership by signing `cancel:<id>` (issue #517).
+      const proof = await signInvoiceCancelMessage(id);
+      await invoiceApi.cancel(id, proof.publicKey, proof.signature);
       toast.success('Invoice cancelled');
       await loadInvoice();
       /*
@@ -343,7 +352,7 @@ export default function InvoiceDetailPage() {
       <div className="max-w-4xl mx-auto relative z-10">
         <main id={MAIN_CONTENT_ID} tabIndex={-1} className="pt-20">
           <h1 className="sr-only">
-            Invoice for {describeAmount(formatAmount(invoice.amount, 7), invoice.assetCode)}
+            Invoice for {describeAmount(canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7), invoice.assetCode)}
           </h1>
 
           {loadError && (
@@ -378,10 +387,10 @@ export default function InvoiceDetailPage() {
                   <dd className="flex items-center gap-3 text-4xl sm:text-5xl font-bold bg-gradient-to-r from-cyan-700 to-blue-700 bg-clip-text text-transparent">
                     <AssetLogo code={invoice.assetCode || 'XLM'} size={32} showName={false} decorative />
                     <span aria-hidden="true">
-                      {formatAmount(invoice.amount, 7)} <span className="text-2xl">{invoice.assetCode || 'XLM'}</span>
+                      {canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7)} <span className="text-2xl">{invoice.assetCode || 'XLM'}</span>
                     </span>
                     <span className="sr-only">
-                      {describeAmount(formatAmount(invoice.amount, 7), invoice.assetCode || 'XLM')}
+                      {describeAmount(canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7), invoice.assetCode || 'XLM')}
                     </span>
                   </dd>
                 </div>
@@ -481,7 +490,7 @@ export default function InvoiceDetailPage() {
                     size={200}
                     showCopy={true}
                     description={`a payment link for ${describeAmount(
-                      formatAmount(invoice.amount, 7),
+                      canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7),
                       invoice.assetCode
                     )}`}
                   />
@@ -499,6 +508,10 @@ export default function InvoiceDetailPage() {
           <div className="mt-6 sm:mt-8">
             <InvoiceTimeline invoice={invoice} now={lifecycleNow} />
           </div>
+
+          {activeWallet && invoice.sellerPublicKey === activeWallet && (
+            <PaymentEventsFeed invoiceId={invoice.id} sellerPublicKey={activeWallet} />
+          )}
         </main>
       </div>
     </div>

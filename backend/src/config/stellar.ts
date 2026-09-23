@@ -5,28 +5,26 @@ dotenv.config();
 
 // Network configuration
 import { SUPPORTED_STELLAR_NETWORKS } from '../../../shared/invoice-validation';
+import {
+  defaultHorizonUrl,
+  explorerSegmentFor,
+  passphraseFor,
+  resolveStellarNetwork,
+} from '../../../shared/network';
 
 export { SUPPORTED_STELLAR_NETWORKS };
-const configuredNetwork = (process.env.STELLAR_NETWORK || 'TESTNET').toUpperCase();
-if (!SUPPORTED_STELLAR_NETWORKS.includes(configuredNetwork as any)) {
-  throw new Error('STELLAR_NETWORK must be TESTNET or PUBLIC');
-}
-export const STELLAR_NETWORK = configuredNetwork as typeof SUPPORTED_STELLAR_NETWORKS[number];
-export const STELLAR_HORIZON_URL = 
-  process.env.STELLAR_HORIZON_URL || 
-  (STELLAR_NETWORK === 'TESTNET' 
-    ? 'https://horizon-testnet.stellar.org' 
-    : 'https://horizon.stellar.org');
+// One resolver for the whole process (issue #511): STELLAR_NETWORK decides
+// the passphrase Freighter must report, the default Horizon URL, and the
+// explorer segment proofs and links render.
+export const STELLAR_NETWORK = resolveStellarNetwork(process.env.STELLAR_NETWORK);
+export const STELLAR_HORIZON_URL =
+  process.env.STELLAR_HORIZON_URL ||
+  defaultHorizonUrl(STELLAR_NETWORK);
 
-export const NETWORK_PASSPHRASE = 
-  STELLAR_NETWORK === 'TESTNET' 
-    ? StellarSdk.Networks.TESTNET 
-    : StellarSdk.Networks.PUBLIC;
+export const NETWORK_PASSPHRASE = passphraseFor(STELLAR_NETWORK);
 
 export const STELLAR_EXPLORER_BASE =
-  STELLAR_NETWORK === 'TESTNET'
-    ? 'https://stellar.expert/explorer/testnet'
-    : 'https://stellar.expert/explorer/public';
+  `https://stellar.expert/explorer/${explorerSegmentFor(STELLAR_NETWORK)}`;
 
 /**
  * The SDK refuses a plaintext Horizon URL unless `allowHttp` is set.

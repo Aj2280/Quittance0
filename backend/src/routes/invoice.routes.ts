@@ -8,11 +8,13 @@ import {
   verifyConcurrencyLock,
 } from '../middleware/rate-limit';
 import { createInvoiceCeilingMiddleware } from '../middleware/invoice-ceiling';
+import { createVerifyCacheMiddleware, verificationCache } from '../middleware/verify-cache';
 
 export interface InvoiceRouterOptions extends InvoiceHandlerOptions {
   enableRateLimiting?: boolean;
   enableConcurrencyLock?: boolean;
   enableCeilingCheck?: boolean;
+  enableVerifyCache?: boolean;
   invoiceCeiling?: number;
 }
 
@@ -71,18 +73,23 @@ export function createInvoiceRouter(options: InvoiceRouterOptions): Router {
 
   router.get('/invoices/:id', handlers.getInvoice);
 
+  // GET /invoices/:id/events - seller-scoped audit feed (issue #515)
+  router.get('/invoices/:id/events', handlers.getPaymentEvents);
+
   // GET /invoices/:id/payment-info - Payment info (no rate limit, needed for checkout)
   router.get('/invoices/:id/payment-info', handlers.getPaymentInfo);
 
   const cancelMiddlewares: RequestHandler[] = [];
   const cancelAuthPreCheck: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
     const requireSig =
-      options.requireCancelSignature ?? (process.env.REQUIRE_CANCEL_SIGNATURE === 'true');
+      options.requireCancelSignature ??
+      (process.env.REQUIRE_CANCEL_SIGNATURE === 'true' ||
+        process.env.NODE_ENV === 'production');
     if (requireSig) {
-      const sellerKey =
-        req.body?.sellerPublicKey || req.headers['x-seller-public-key'] || req.query?.sellerPublicKey;
-      const signature =
-        req.body?.signature || req.headers['x-signature'] || req.headers['x-seller-signature'];
+      // Body-only contract (issue #517): the handler rejects query/header
+      // transports itself; this pre-check only enforces signature presence.
+      const sellerKey = req.body?.sellerPublicKey;
+      const signature = req.body?.signature;
       if (!sellerKey || !signature) {
         return res.status(401).json({
           success: false,
@@ -99,12 +106,24 @@ export function createInvoiceRouter(options: InvoiceRouterOptions): Router {
   }
   router.post('/invoices/:id/cancel', ...cancelMiddlewares, handlers.cancelInvoice);
 
+  const enableVerifyCache =
+    options.enableVerifyCache ?? (process.env.DISABLE_VERIFY_CACHE !== 'true');
+
   const verifyMiddlewares: RequestHandler[] = [];
   if (enableConcurrencyLock) {
     verifyMiddlewares.push(verifyConcurrencyLock());
   }
   if (enableRateLimiting) {
     verifyMiddlewares.push(...createVerifyRateLimiters());
+  }
+  // Last in the chain: rate limiters still 429 a flood first, and a cache hit
+  // then replays the recorded verdict without another Horizon round trip. The
+  // middleware and the handler share one cache instance so a test override is
+  // honoured by both.
+  if (enableVerifyCache) {
+    verifyMiddlewares.push(
+      createVerifyCacheMiddleware(options.verifyCache ?? verificationCache)
+    );
   }
   router.post('/invoices/:id/verify', ...verifyMiddlewares, handlers.verifyPayment);
 
