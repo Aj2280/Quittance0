@@ -36,22 +36,41 @@ function resolve(url) {
   return Promise.resolve({ data: routes.get(matches[0]) });
 }
 
+/** Request log so a test can assert a call happened, not just its result. */
+const calls = [];
+
 function createInstance() {
   return {
     interceptors: {
       request: { use() {} },
       response: { use() {} },
     },
-    get: (url) => resolve(url),
-    post: (url) => resolve(url),
+    get: (url) => {
+      calls.push(`GET ${url}`);
+      return resolve(url);
+    },
+    post: (url) => {
+      calls.push(`POST ${url}`);
+      return resolve(url);
+    },
   };
+}
+
+function getCalls() {
+  return [...calls];
+}
+
+function resetCalls() {
+  calls.length = 0;
 }
 
 const axios = {
   create: createInstance,
   setResponse,
   resetResponses,
+  getCalls,
+  resetCalls,
 };
 
 export default axios;
-export { setResponse, resetResponses };
+export { setResponse, resetResponses, getCalls, resetCalls };

@@ -46,15 +46,29 @@ export type VerificationCode =
   | 'INVOICE_NOT_PENDING'
   | 'TRANSACTION_NOT_FOUND'
   | 'TRANSACTION_CLOSE_TIME_UNAVAILABLE'
+  | 'VERIFY_UNAVAILABLE'
   | 'NO_PAYMENT_OPERATION'
+  | 'AMBIGUOUS_PAYMENT_OPERATION'
+  | 'MEMO_TYPE_MISMATCH'
   | 'MEMO_MISMATCH'
   | 'DESTINATION_MISMATCH'
   | 'AMOUNT_MISMATCH'
+  | 'AMOUNT_TOO_LOW'
+  | 'AMOUNT_TOO_HIGH'
   | 'ASSET_MISMATCH'
   | 'NETWORK_MISMATCH'
   | 'TX_HASH_ALREADY_USED';
 
-/** The rejection code each check produces when it fails. */
+/**
+ * The rejection code each check produces when it fails.
+ *
+ * `amount` is the one check with more than one outcome. Underpayment and
+ * overpayment are separate codes (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`) and
+ * `AMOUNT_MISMATCH` is what the check returns when the amount cannot be
+ * compared at all, such as a non-numeric or missing value. Keeping that
+ * fallback here means the map still answers which code each check in the
+ * pipeline produces.
+ */
 export const CHECK_REJECTION_CODES: Record<VerificationCheck, VerificationCode> = {
   memo: 'MEMO_MISMATCH',
   destination: 'DESTINATION_MISMATCH',
@@ -82,10 +96,15 @@ export const VERIFICATION_MESSAGES: Record<VerificationCode, string> = {
   INVOICE_NOT_PENDING: 'Invoice is not pending',
   TRANSACTION_NOT_FOUND: 'Transaction not found on Stellar',
   TRANSACTION_CLOSE_TIME_UNAVAILABLE: 'Transaction close time is unavailable; try verification again later',
+  VERIFY_UNAVAILABLE: 'Verification is temporarily unavailable; try again shortly',
   NO_PAYMENT_OPERATION: 'No payment operation found in transaction',
+  AMBIGUOUS_PAYMENT_OPERATION: 'Transaction contains more than one payment to the invoice destination',
+  MEMO_TYPE_MISMATCH: 'Payment memo type is not a text memo',
   MEMO_MISMATCH: 'Memo mismatch',
   DESTINATION_MISMATCH: 'Payment destination mismatch',
   AMOUNT_MISMATCH: 'Amount mismatch',
+  AMOUNT_TOO_LOW: 'Payment is less than the invoice amount',
+  AMOUNT_TOO_HIGH: 'Payment is more than the invoice amount',
   ASSET_MISMATCH: 'Asset mismatch',
   NETWORK_MISMATCH: 'Transaction is on a different Stellar network',
   TX_HASH_ALREADY_USED: 'Transaction already settled another invoice',

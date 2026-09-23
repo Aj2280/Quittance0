@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { User, LogOut, Wallet, ChevronDown } from 'lucide-react';
 import { useWalletStore } from '@/lib/store';
+import { initialsFromAddress } from '@/lib/wallet-initials';
+import { networkLabel } from '@/lib/freighter-availability';
 import { NETWORK_DISPLAY_NAME } from '@/lib/stellar';
 import { initialsFromAddress } from '@/lib/wallet-initials';
 import { networkLabel } from '@/lib/freighter-availability';

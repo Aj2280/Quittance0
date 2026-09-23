@@ -6,7 +6,13 @@ invoice controller, and `stellar.service` — routes through
 rejection codes stay identical everywhere.
 
 The module is pure: callers fetch the transaction and its operations from
-Horizon and hand them in.
+Horizon and hand them in. All Horizon traffic goes through
+`backend/src/utils/horizon-client.ts`, which bounds each call with a
+timeout, retries 429/5xx honoring `Retry-After`, and shares one concurrency
+budget between verify and the monitor. When Horizon stays unreachable the
+caller reports `VERIFY_UNAVAILABLE` (503) rather than
+`TRANSACTION_NOT_FOUND` — an outage must never read as a rejection, and it
+is never written to the verify cache.
 
 ## Order of checks
 
@@ -16,12 +22,55 @@ Checks run in a fixed order so every caller reports the same *first* failure:
    Horizon round trip (`MISSING_TX_HASH`, `INVALID_TX_HASH`)
 2. **Network** — a testnet payment cannot settle a pubnet invoice
    (`NETWORK_MISMATCH`)
-3. **Payment operation** — the transaction must contain one
-   (`NO_PAYMENT_OPERATION`)
-4. **Memo** — must equal the invoice memo (`MEMO_MISMATCH`)
-5. **Destination** — must be the seller's account (`DESTINATION_MISMATCH`)
-6. **Amount** — compared at Stellar's 7-decimal precision (`AMOUNT_MISMATCH`)
+3. **Payment operation** — the transaction's operations are walked for
+   payment-delivering ops (`payment`, `path_payment_strict_receive`,
+   `path_payment_strict_send`); non-payment ops like `change_trust` are
+   ignored. The transaction must contain exactly one payment to the
+   invoice's destination: zero payments anywhere is
+   `NO_PAYMENT_OPERATION`, and two or more payments to the seller is
+   `AMBIGUOUS_PAYMENT_OPERATION` — verification never sums them or picks
+   between them
+4. **Memo** — the transaction must carry a *text* memo (or none): `hash`,
+   `id` and `return` memos are rejected outright as `MEMO_TYPE_MISMATCH`
+   rather than coerced into the comparison, and a text memo must then equal
+   the invoice memo (`MEMO_MISMATCH`)
+5. **Destination** — must be the seller's account (`DESTINATION_MISMATCH`).
+   A muxed `M...` address counts when its underlying account is the seller's
+   `G...` key; a muxed address of a different account does not.
+6. **Amount** — compared at Stellar's 7-decimal precision with no tolerance:
+   less than the invoice is `AMOUNT_TOO_LOW`, more is `AMOUNT_TOO_HIGH`, and
+   `AMOUNT_MISMATCH` is reserved for an amount that cannot be compared at all
+   (`abc`, an empty string, a missing operation field)
 7. **Asset** — code *and* issuer (`ASSET_MISMATCH`)
+
+## Destination matching and muxed accounts
+
+Wallets may pay a muxed `M...` account whose underlying `G` account is the
+seller. Destination matching follows Stellar's muxed-account rules rather than
+comparing strings:
+
+| Payment `to` | Invoice seller | Result |
+| --- | --- | --- |
+| `G...` equal to the seller | `G...` | **settles** |
+| `M...` whose base account is the seller | `G...` | **settles**; the muxed id is recorded on the `PAYMENT_CONFIRMED` event |
+| `M...` of a different base account | `G...` | `DESTINATION_MISMATCH` |
+| malformed `M...` or any other string | `G...` | `DESTINATION_MISMATCH` |
+
+Decoding goes through the SDK (`MuxedAccount.fromAddress`), never string
+slicing — a malformed destination fails closed instead of being coerced into a
+`G` key. The seller identity stored on the invoice, shown on the proof, and
+used for dashboard scoping stays the plain `G...` account throughout.
+
+## Amount policy
+
+An invoice settles on the exact amount, not on at-least. A payment one stroop
+short is rejected as `AMOUNT_TOO_LOW` and the invoice stays `PENDING`: the
+money is not lost, but it does not settle the invoice either. A payment one
+stroop over is rejected as `AMOUNT_TOO_HIGH`: the funds still reach the
+seller, but the invoice does not transition on them, so a client that
+overpays cannot silently turn a 50 USDC invoice into a 100 USDC one. Both
+outcomes are recorded in the payment-event log for reconciliation
+(see [LATE_PAYMENT_POLICY.md](./LATE_PAYMENT_POLICY.md)).
 
 ## Asset matching
 

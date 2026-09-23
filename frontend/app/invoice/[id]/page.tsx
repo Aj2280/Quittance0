@@ -14,31 +14,45 @@ import FreighterInstallPrompt from '@/components/FreighterInstallPrompt';
 import PaymentReceipt from '@/components/PaymentReceipt';
 import AssetLogo from '@/components/AssetLogo';
 import { formatAmount, formatDate, getTimeRemaining } from '@/lib/utils';
+import { canonicalAmount } from '@/lib/stroop-amount';
 import { MAIN_CONTENT_ID, describeAmount, statusText } from '@/lib/a11y';
-import { ArrowLeft, Share2, Loader2, X, Mail } from 'lucide-react';
+import { ArrowLeft, Share2, Loader2, X, Mail, Link2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useWalletStore } from '@/lib/store';
 import ApiErrorState from '@/components/ApiErrorState';
 import { effectiveInvoiceStatus } from '@/lib/invoice-lifecycle';
+import { invoiceWorkspaceAccess } from '@/lib/invoice-workspace-access';
+import InvoiceTimeline from '@/components/InvoiceTimeline';
+import PaymentEventsFeed from '@/components/PaymentEventsFeed';
 import { invoiceSharePath } from '@/lib/invoice-share-path';
-import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
+import { shareInvoiceByEmail } from '@/lib/export';
+import { EXPECTED_WALLET_NETWORK, signInvoiceCancelMessage } from '@/lib/stellar';
 import { walletGate } from '@/lib/freighter-availability';
+import { copyWithFeedback } from '@/lib/clipboard-feedback';
 
 export default function InvoiceDetailPage() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
+  const {
+    publicKey,
+    publicKey: storePublicKey,
+    connected,
+    network,
+    networkPassphrase,
+    freighterAvailable,
+  } = useWalletStore();
+  // The gate and the acting wallet are read by the loaders below, so they
+  // are computed here rather than beside the JSX they also serve.
+  const gate = walletGate(
+    { freighterAvailable, connected, publicKey, network, networkPassphrase },
+    EXPECTED_WALLET_NETWORK
+  );
+  const userWallet = gate.ready ? publicKey : null;
 
   const [invoice, setInvoice] = useState<any>(null);
   const [paymentInfo, setPaymentInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const { publicKey, connected, network, freighterAvailable } = useWalletStore();
-  const gate = walletGate(
-    { freighterAvailable, connected, publicKey, network },
-    EXPECTED_WALLET_NETWORK
-  );
-  const userWallet = gate.ready ? publicKey : null;
-  const activeWallet = userWallet || (connected ? publicKey : null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lifecycleNow, setLifecycleNow] = useState(() => Date.now());
   // Cancelling reloads the invoice and swaps the status panel out from under
@@ -50,11 +64,17 @@ export default function InvoiceDetailPage() {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Declared before loadInvoice so the loader can present it as the workspace
+  // credential — the seller-scoped GET returns contact fields only to the
+  // invoice's own wallet (issue #503). When the wallet connects or switches,
+  // the load effect re-runs and picks up the richer shape.
+  const activeWallet = userWallet || (connected ? storePublicKey : null);
+
   const loadInvoice = useCallback(async () => {
     setLoadError(null);
     try {
       const [invoiceResult, paymentResult] = await Promise.allSettled([
-        invoiceApi.getById(id),
+        invoiceApi.getById(id, activeWallet),
         invoiceApi.getPaymentInfo(id),
       ]);
 
@@ -73,14 +93,17 @@ export default function InvoiceDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, activeWallet]);
 
   useEffect(() => {
     void loadInvoice();
   }, [loadInvoice]);
 
+  /** The canonical share URL for this invoice: the payer's page. */
+  const payLink = () => `${window.location.origin}${invoiceSharePath(invoice.id)}`;
+
   const handleShare = async () => {
-    const url = `${window.location.origin}${invoiceSharePath(invoice.id)}`;
+    const url = payLink();
 
     if (navigator.share) {
       try {
@@ -92,16 +115,34 @@ export default function InvoiceDetailPage() {
       } catch {
         // User cancelled share
       }
+      return;
+    }
+
+    await handleCopyPayLink();
+  };
+
+  /*
+   * Copying the pay link is the one share action that has to work on every
+   * device. The Web Share sheet is not universally available and the async
+   * clipboard is refused outright in an insecure context, so this goes through
+   * `copyWithFeedback`, which reports the failure instead of leaving the
+   * seller with a silent no-op (issue #431).
+   */
+  const handleCopyPayLink = async () => {
+    const copied = await copyWithFeedback(payLink());
+    if (copied) {
+      toast.success('Payment link copied');
     } else {
-      await navigator.clipboard.writeText(url);
-      toast.success('Invoice link copied');
+      toast.error('Could not copy the payment link — select it on the payment page instead');
     }
   };
 
   const handleCancel = async () => {
     if (!window.confirm('Cancel this invoice?')) return;
     try {
-      await invoiceApi.cancel(id, activeWallet || invoice?.sellerPublicKey);
+      // Wallet proves ownership by signing `cancel:<id>` (issue #517).
+      const proof = await signInvoiceCancelMessage(id);
+      await invoiceApi.cancel(id, proof.publicKey, proof.signature);
       toast.success('Invoice cancelled');
       await loadInvoice();
       /*
@@ -169,6 +210,56 @@ export default function InvoiceDetailPage() {
 
   const effectiveStatus = (effectiveInvoiceStatus(invoice, lifecycleNow) || invoice.status) as
     'PENDING' | 'PAID' | 'EXPIRED' | 'CANCELLED';
+  // Seller-only workspace (issue #454): unlike /pay/[id], this page must not
+  // reveal invoice details -- amount, memo, customer contact info, timeline
+  // -- to a wallet that isn't the invoice's own seller. `activeWallet` is
+  // already computed above from the same wallet-gate the rest of the page
+  // uses, so this is one extra check, not a second source of truth for who
+  // is connected.
+  const access = invoiceWorkspaceAccess(invoice, activeWallet);
+  if (access !== 'allowed') {
+    return (
+      <main
+        id={MAIN_CONTENT_ID}
+        tabIndex={-1}
+        className="min-h-screen bg-logo-pattern relative flex items-center justify-center px-4"
+      >
+        <div className="orb orb-1"></div>
+        <div className="orb orb-2"></div>
+        <div className="orb orb-3"></div>
+        <div className="card text-center max-w-md relative z-10" role="alert">
+          {access === 'wallet-required' ? (
+            <>
+              <h1 className="text-2xl font-bold text-gray-900 mb-2">Connect Your Wallet</h1>
+              <p className="text-gray-700 mb-6">
+                This invoice workspace is only visible to the seller. Connect the seller
+                wallet to continue, or use the{' '}
+                <Link href={`/pay/${id}`} className="text-cyan-700 hover:underline">
+                  payment page
+                </Link>{' '}
+                if you are paying this invoice.
+              </p>
+              <div className="flex justify-center">
+                <WalletConnect />
+              </div>
+            </>
+          ) : (
+            <>
+              <h1 className="text-2xl font-bold text-red-700 mb-2">Access Restricted</h1>
+              <p className="text-gray-700 mb-6">
+                This invoice belongs to another seller wallet. If you are the customer paying
+                this invoice, use the{' '}
+                <Link href={`/pay/${id}`} className="text-cyan-700 hover:underline">
+                  payment page
+                </Link>{' '}
+                instead.
+              </p>
+            </>
+          )}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-logo-pattern relative py-8 sm:py-12 px-4">
@@ -203,6 +294,21 @@ export default function InvoiceDetailPage() {
             ) : (
               <UserProfile userWallet={publicKey} />
             )}
+            {/*
+              Available in every status, not just PENDING: the link is how a
+              seller re-sends an invoice and how a payer revisits a paid one.
+              The label is on the button because the visible text is hidden
+              below `sm`.
+            */}
+            <button
+              type="button"
+              onClick={() => void handleCopyPayLink()}
+              className="btn btn-outline flex items-center gap-2"
+              aria-label="Copy the payment link for this invoice"
+            >
+              <Link2 className="w-5 h-5" aria-hidden="true" />
+              <span className="hidden sm:inline">Copy pay link</span>
+            </button>
             {effectiveStatus === 'PENDING' && (
               <div className="flex items-center gap-2">
                 {invoice.customerEmail && (
@@ -245,7 +351,7 @@ export default function InvoiceDetailPage() {
       <div className="max-w-4xl mx-auto relative z-10">
         <main id={MAIN_CONTENT_ID} tabIndex={-1} className="pt-20">
           <h1 className="sr-only">
-            Invoice for {describeAmount(formatAmount(invoice.amount, 7), invoice.assetCode)}
+            Invoice for {describeAmount(canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7), invoice.assetCode)}
           </h1>
 
           {loadError && (
@@ -280,10 +386,10 @@ export default function InvoiceDetailPage() {
                   <dd className="flex items-center gap-3 text-4xl sm:text-5xl font-bold bg-gradient-to-r from-cyan-700 to-blue-700 bg-clip-text text-transparent">
                     <AssetLogo code={invoice.assetCode || 'XLM'} size={32} showName={false} decorative />
                     <span aria-hidden="true">
-                      {formatAmount(invoice.amount, 7)} <span className="text-2xl">{invoice.assetCode || 'XLM'}</span>
+                      {canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7)} <span className="text-2xl">{invoice.assetCode || 'XLM'}</span>
                     </span>
                     <span className="sr-only">
-                      {describeAmount(formatAmount(invoice.amount, 7), invoice.assetCode || 'XLM')}
+                      {describeAmount(canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7), invoice.assetCode || 'XLM')}
                     </span>
                   </dd>
                 </div>
@@ -383,7 +489,7 @@ export default function InvoiceDetailPage() {
                     size={200}
                     showCopy={true}
                     description={`a payment link for ${describeAmount(
-                      formatAmount(invoice.amount, 7),
+                      canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7),
                       invoice.assetCode
                     )}`}
                   />
@@ -397,6 +503,14 @@ export default function InvoiceDetailPage() {
               )}
             </div>
           </div>
+
+          <div className="mt-6 sm:mt-8">
+            <InvoiceTimeline invoice={invoice} now={lifecycleNow} />
+          </div>
+
+          {activeWallet && invoice.sellerPublicKey === activeWallet && (
+            <PaymentEventsFeed invoiceId={invoice.id} sellerPublicKey={activeWallet} />
+          )}
         </main>
       </div>
     </div>

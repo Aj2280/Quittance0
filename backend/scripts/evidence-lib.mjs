@@ -99,6 +99,8 @@ export function publicArtifact(config, values) {
     network: TESTNET_NETWORK,
     horizonUrl: config.horizonUrl,
     invoiceId: values.invoiceId,
+    // The link the buyer receives; part of the loop the smoke proves.
+    payUrl: values.payUrl || null,
     amount: config.amount,
     asset: 'XLM',
     memo: values.memo,

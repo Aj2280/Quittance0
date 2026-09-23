@@ -9,6 +9,7 @@
 import { createHash } from 'node:crypto';
 import { Keypair } from '@stellar/stellar-sdk';
 import { isValidPublicInvoiceId } from '../utils/memory-public-id';
+import { compareAmounts } from '../utils/safe-amount-compare';
 import type { StoredInvoice, InvoiceStorage } from '../storage/invoice-storage';
 import type { MemoryStorage } from '../storage/memory-storage';
 import type { Queryable } from './invoice.service';
@@ -520,7 +521,9 @@ export async function verifyCutoverParity(
     if (sourceInv.sellerPublicKey !== targetInv.sellerPublicKey) {
       mismatches.push(`Seller public key mismatch for ${id}`);
     }
-    if (Number(sourceInv.amount) !== Number(targetInv.amount)) {
+    // Stroop-exact compare: '10.0000000' and 10 must not flag as a mismatch,
+    // and a float `!==` could hide a one-stroop drift.
+    if (!compareAmounts(sourceInv.amount, targetInv.amount)) {
       mismatches.push(`Amount mismatch for ${id}: source ${sourceInv.amount} != target ${targetInv.amount}`);
     }
     if (sourceInv.assetCode !== targetInv.assetCode) {

@@ -51,7 +51,30 @@ Landing, dashboard, create, pay, and invoice-detail all use the same gate matrix
 install Freighter when the extension is missing, connect Freighter when no public
 key is available, switch networks when Freighter is not on
 `NEXT_PUBLIC_STELLAR_NETWORK`, and continue only when the wallet is connected on
-the expected network.
+the expected network. The network check is passphrase-strict: when Freighter
+reports a network passphrase it must equal the resolved network's passphrase
+exactly — a custom network may call itself `TESTNET` but cannot forge
+`Test SDF Network ; September 2015`. Wallets that report no passphrase fall
+back to the network-name comparison. `shared/network.ts` is the single
+resolver both deployments use: it maps the configured network to the
+passphrase, the default Horizon URL, and the explorer segment, and proof
+exports always claim the server's resolved network rather than a caller hint
+(a mismatched `?network=` query fails closed with 400).
+
+### Create-form draft across a wallet disconnect
+
+The create form is only rendered while that gate is satisfied, so locking or
+disconnecting Freighter mid-form unmounts it. The fields a person typed —
+amount, asset, description, seller and client name/email, and the payment window
+— are kept in `sessionStorage` by `frontend/lib/invoice-draft.js`: one key per
+tab, dropped when the draft is empty and cleared once the invoice is created.
+Nothing about the wallet is stored (no public key, signature, balance or invoice
+id), so the draft holds only what was typed into the form.
+
+Reconnecting on the expected network restores those fields and re-enables create
+in the same page load; reconnecting on the wrong network keeps create
+unavailable and shows the existing mismatch prompt instead of submitting an
+invoice the verifier would reject.
 
 ---
 
@@ -97,6 +120,8 @@ Rejections return a stable `code` alongside the human-readable `error`:
 | `MEMO_MISMATCH` | Memo mismatch | 400 |
 | `DESTINATION_MISMATCH` | Payment destination mismatch | 400 |
 | `AMOUNT_MISMATCH` | Amount mismatch | 400 |
+| `AMOUNT_TOO_LOW` | Payment is less than the invoice amount | 400 |
+| `AMOUNT_TOO_HIGH` | Payment is more than the invoice amount | 400 |
 | `ASSET_MISMATCH` | Asset mismatch | 400 |
 | `NETWORK_MISMATCH` | Transaction is on a different Stellar network | 400 |
 
@@ -141,13 +166,76 @@ Quittance supports multi-asset invoicing across native XLM and credit assets suc
 ### Seller invoice management & cancellation
 
 Sellers manage their invoices from the dashboard and detail views:
-- **Cancel Pending Invoices**: Sellers can cancel any pending invoice before payment or expiration. Cancellation is strictly gated on wallet ownership: `POST /api/invoices/:id/cancel` verifies the request against the invoice's `sellerPublicKey` (returning `403 Forbidden` on a mismatch).
+- **Cancel Pending Invoices**: Sellers can cancel any pending invoice before payment or expiration. Cancellation uses one proof path (issue #517): the request body carries `sellerPublicKey` plus a Freighter signature over the canonical message `cancel:<invoiceId>` — the UI signs via `signBlob` before calling `POST /api/invoices/:id/cancel`. Query params and `x-seller-public-key` headers are not accepted as transports, and a value that disagrees with the body returns `400`. A foreign signer returns `403`; a missing or invalid signature returns `401`; only `PENDING` invoices can cancel. Signatures are mandatory in production (`NODE_ENV=production` or `REQUIRE_CANCEL_SIGNATURE=true`); local dev/tests keep the signature optional bypass.
 - **Copy Pay & Share Links**: Direct quick-copy actions with toast feedback for pay URLs and invoice IDs across dashboard cards and detail pages.
 - **Proof & Receipt Navigation**: One-click jump to verified PDF payment proof and transaction details for all `PAID` invoices.
 
 ---
 
-## Stack
+## Dual-backend server (Issue #452)
+
+`backend/src/server-dual.ts` is the unified server entrypoint that selects
+the storage backend via an environment variable. Both the in-memory MVP and
+PostgreSQL back the same handler code through the `InvoiceStorage` interface,
+so a bug fix or new feature in a handler applies to both backends at once.
+
+### Storage selection
+
+| `INVOICE_STORAGE` | `DATABASE_URL` present | Backend used |
+|---|---|---|
+| `memory` (explicit) | any | In-memory (no DB needed) |
+| `postgres` (explicit) | ✓ | PostgreSQL |
+| `postgres` (explicit) | ✗ | **Boot error** — fails immediately with a clear message |
+| (unset) | ✓ | PostgreSQL (implicit) |
+| (unset) | ✗ | In-memory (implicit default) |
+
+Memory is the safe default. Setting `INVOICE_STORAGE=postgres` without
+providing `DATABASE_URL` is always an error — the server never silently falls
+back to memory when Postgres was explicitly requested.
+
+### Start the dual-mode server
+
+```bash
+cd backend
+
+# In-memory (no database):
+npm run dev:dual
+
+# PostgreSQL (database required):
+INVOICE_STORAGE=postgres DATABASE_URL=postgresql://... npm run dev:dual
+
+# Or via .env:
+echo "INVOICE_STORAGE=postgres" >> .env
+echo "DATABASE_URL=postgresql://user:pass@localhost:5432/quittance" >> .env
+npm run dev:dual
+```
+
+### Postgres setup for the dual-mode server
+
+```bash
+cd backend
+npm run db:migrate   # applies db/schema.sql (idempotent, safe to re-run)
+npm run db:seed      # optional: two demo sellers for wallet-scoping visibility
+```
+
+### Run the dual-backend tests
+
+```bash
+cd backend
+npm run test:dual    # invoice-dual-backend, postgres-restart-persistence, cross-seller-isolation
+npm test             # full suite: all of the above + existing tests
+```
+
+### Return to memory-only mode
+
+Set `INVOICE_STORAGE=memory` in `backend/.env` and restart, or switch to the
+hardcoded MVP entrypoint (`npm run dev:mvp`). The PostgreSQL database is not
+modified; rows persist and reappear when you re-enable Postgres.
+
+See [Postgres persistence (optional)](#postgres-persistence-optional) for
+migration commands, test flags, and the full cutover procedure.
+
+---
 
 | Layer | Tech |
 |-------|------|
@@ -306,6 +394,20 @@ The dashboard sends the connected wallet on every call:
 `GET /api/invoices?sellerPublicKey=G...` and `GET /api/invoices/stats?sellerPublicKey=G...`
 both return `400` when the seller key is missing.
 
+`POST /api/invoices` is idempotent (issue #514): send an `Idempotency-Key`
+header (or `idempotencyKey` body field) and a replay returns the original
+invoice — same id, memo, and pay link — instead of minting a second one.
+Keyless retries are still safe: identical create intent from the same seller
+inside a 2-minute window collapses onto the original row.
+
+`GET /api/invoices/:id` serves two shapes from one record (issue #503): anonymous
+callers — including the `/pay/:id` checkout page — receive the public pay DTO
+(amount, asset, memo, destination, status, expiry, payment fields only), while
+`GET /api/invoices/:id?sellerPublicKey=<the invoice's own seller key>` returns
+the full workspace record with client contact and payer identity. The same
+public shape is embedded in `GET /api/invoices/:id/payment-info` and returned
+by `POST /api/invoices/:id/verify`.
+
 ### 4) Tests
 
 ```bash
@@ -360,6 +462,12 @@ Templates: `frontend/env.example.txt`, `frontend/env.mvp.local`.
 Recommended host for `server-mvp.ts` (in-memory). `backend/vercel.json` now has
 an optional serverless MVP entrypoint, but Render is the documented demo path
 because it exposes normal liveness/readiness checks and predictable logs.
+For complete details across Render, Fly.io, Railway, and Kubernetes, see [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
+
+### Liveness vs Readiness Check Contract
+
+- **Liveness (`/api/health` or `/health`)**: Monitors process status. Probed by platforms to decide container restarts. Responds immediately (200 OK) without touching external APIs or databases, preventing cold-start restart loops.
+- **Readiness (`/api/ready` or `/ready`)**: Monitors deployment configuration and service readiness. Probed by platforms to gate traffic routing. Fails fast (503 Service Unavailable) if critical variables (`FRONTEND_URL`, `STELLAR_NETWORK`, `STELLAR_HORIZON_URL`, `ALLOW_SIMULATE`) are missing or misconfigured. In-memory demo deploy is never blocked on PostgreSQL. Optional Horizon connectivity ping can be enabled via `HEALTH_HORIZON_PING=true`.
 
 ### Manual Web Service
 
@@ -367,7 +475,7 @@ because it exposes normal liveness/readiness checks and predictable logs.
 2. **Root Directory:** `backend`  
 3. **Build:** `npm ci && npm run build`
 4. **Start:** `npm run start:mvp:prod`
-5. Health check path: `/api/ready` (`/api/health` remains liveness)
+5. **Health check path:** `/api/ready` (Render uses this to gate traffic and deploy transitions; `/api/health` remains liveness)
 6. Environment variables:
 
 | Variable | Value |
@@ -378,6 +486,7 @@ because it exposes normal liveness/readiness checks and predictable logs.
 | `FRONTEND_URL` | `https://YOUR-APP.vercel.app` (exact frontend origin) |
 | `FRONTEND_URLS` | Optional comma-separated preview/custom origins |
 | `ALLOW_SIMULATE` | `false` |
+| `HEALTH_HORIZON_PING` | `false` (optional, default false) |
 
 `PORT` is set by Render automatically.
 
@@ -429,24 +538,36 @@ fallback UX without Google login, and demonstration instructions are in
 
 ## Tests & CI
 
-Every pull request and every push to `main` runs the same three jobs defined in
-[`.github/workflows/ci.yml`](./.github/workflows/ci.yml). All of them are
-reproducible locally with the commands below — CI runs nothing you cannot run
-yourself.
+Every pull request and every push to `main` runs the jobs defined in
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml): `backend`,
+`frontend`, `root-tests` (shared contracts), and an optional
+`evidence-smoke`. All of them are reproducible locally with the commands
+below — CI runs nothing you cannot run yourself.
+
+The root [`package.json`](./package.json) is a thin, dependency-free
+orchestration layer over `shared`/`backend`/`frontend`'s own scripts — it
+has no `node_modules` of its own to install. Each command below is the
+exact local equivalent of one CI job or step; `npm run ci` runs the same
+sequence CI does end to end (except `evidence-smoke`, which needs real
+Testnet secrets `evidence:smoke` documents separately below).
 
 ```bash
-# Backend: typecheck + unit and integration tests
-cd backend && npm ci && npm run typecheck && npm test
+# The full local mirror of CI (installs backend + frontend deps first)
+npm run ci
 
-# Frontend: lint + typecheck + unit tests
-cd frontend && npm ci && npm run lint && npm run typecheck && npm test
-
-# Frontend: focused axe, focus-management, live-region, and contrast checks
-cd frontend && npm run test:a11y
-
-# Shared export helpers (repository root)
-node --test "tests/**/*.test.mjs"
+# Individual pieces, once dependencies are installed:
+npm run test:shared      # Shared export/contract tests (repository root)
+npm run test:backend     # Backend: unit + integration tests
+npm run test:frontend    # Frontend: unit tests
+npm run test:a11y        # Frontend: focused axe, focus, live-region, contrast checks
+npm run lint:frontend    # Frontend: next lint
+npm run typecheck        # Backend + frontend: tsc --noEmit
+npm test                 # test:shared + test:backend + test:frontend together
 ```
+
+These call straight through to each package's own scripts (e.g.
+`npm --prefix backend test`), so `cd backend && npm test` still works
+exactly as before if you'd rather work inside one package at a time.
 
 The focused accessibility suite renders the landing, dashboard, pay, and
 invoice-detail routes in jsdom, audits them with axe, and directly checks the
@@ -472,7 +593,8 @@ refuse, this test fails.
 
 ### Environment variables in CI
 
-No secrets are required. The workflow sets only:
+The default `backend`, `frontend`, and `root-tests` jobs that run on every PR
+require no secrets. The workflow sets only:
 
 | Variable | Job | Why |
 |---|---|---|
@@ -485,8 +607,28 @@ A plaintext Horizon URL is accepted **only** for a loopback address
 (`backend/src/config/stellar.ts`), so a real deployment can never be downgraded
 to HTTP by configuration.
 
-For a manual testnet pass with a real Freighter payment, see
-[`EVIDENCE.md`](./EVIDENCE.md).
+### `evidence-smoke`: optional, secrets-gated, never required for a PR to pass
+
+Unlike the three jobs above, `evidence-smoke` runs a real create → pay →
+verify pass against Stellar **Testnet** (`backend/scripts/evidence-smoke.mjs`,
+also runnable locally as `cd backend && npm run evidence:smoke`). That needs
+a funded Testnet keypair, which is exactly the kind of thing a public repo
+must not require an external contributor's PR to have:
+
+- The job's final step is gated by `env.EVIDENCE_PAYER_SECRET` and
+  `env.EVIDENCE_SELLER_PUBLIC_KEY` being non-empty. GitHub never exposes
+  repository secrets to a fork's `pull_request` context at all, so on an
+  external contributor's PR these are always empty and the step is skipped
+  cleanly — it is not possible for a fork PR to fail this job for lacking
+  credentials it was never meant to have.
+- Where the repository's own `EVIDENCE_SELLER_PUBLIC_KEY` and
+  `EVIDENCE_PAYER_SECRET` secrets (and `EVIDENCE_API_URL` repository
+  variable) **are** configured — this repository's own main-branch pushes,
+  or a PR from a branch within it — the step runs for real and its failure
+  does block the job, the same as any other test.
+
+For a manual testnet pass with a real Freighter payment instead of this
+scripted one, see [`EVIDENCE.md`](./EVIDENCE.md).
 
 ---
 

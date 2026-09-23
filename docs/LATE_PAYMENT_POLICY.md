@@ -181,7 +181,8 @@ monitor and manual verify endpoint must call the same policy function.
   instant as late. This matches the current expires_at > NOW() payment guard.
 - At exactly cancelledAt, classify the payment as after cancellation.
 - A chain reorg or failed transaction never creates a payment proof.
-- Overpayment is a mismatch under the current exact-amount contract; record it
+- Overpayment is rejected under the current exact-amount contract and is
+  reported as `AMOUNT_TOO_HIGH` (underpayment is `AMOUNT_TOO_LOW`); record both
   for reconciliation but do not silently settle.
 - The policy records receipt only. It does not promise a refund, clawback, or
   legal discharge.

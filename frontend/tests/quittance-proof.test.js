@@ -1,3 +1,10 @@
+// The PDF creation date is rendered by jsPDF in the host's local time with
+// its UTC offset, so the same proof produced on two machines differed in that
+// one token and the golden comparison failed on every host outside the zone
+// the fixture was made in. The zone is pinned before anything renders; the
+// assertion below stays byte-for-byte.
+process.env.TZ = 'UTC';
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -99,6 +106,8 @@ test('keeps an unsettled invoice honest instead of rendering blank fields', () =
     status: 'unverified',
     method: 'none',
     checkedAt: null,
+    settlementContext: null,
+    latePaymentWarningCode: null,
   });
   assert.equal(proof.schemaVersion, QUITTANCE_PROOF_VERSION);
 });
@@ -211,4 +220,65 @@ test('generateInvoicePDF delegates directly to renderQuittanceProofHtml for Quit
   assert.equal(fromExport, fromProof);
   assert.equal(fromQuittancePdf, fromProof);
   assert.equal(fromExport, goldenProofHtml);
+});
+
+// --- Issue #509: deterministic paid-invoice export -------------------------
+
+const paidXlmInvoice = {
+  id: 'inv_Xlm1',
+  status: 'PAID',
+  sellerPublicKey: 'G' + 'B'.repeat(55),
+  payerPublicKey: 'G' + 'C'.repeat(55),
+  amount: 42.5,
+  assetCode: 'XLM',
+  memo: 'QUIT-XLM1',
+  paymentTxHash: TX_HASH,
+  createdAt: '2026-09-10T09:00:00.000Z',
+  expiresAt: '2026-09-17T09:00:00.000Z',
+  paidAt: '2026-09-13T09:21:44.000Z',
+  settledAt: '2026-09-13T09:21:44.000Z',
+};
+
+test('paid invoice export is byte-identical in UTC and a non-UTC timezone', () => {
+  process.env.TZ = 'UTC';
+  const usdcUtc = generateInvoicePDF(paidInvoice);
+  const xlmUtc = generateInvoicePDF(paidXlmInvoice);
+
+  process.env.TZ = 'America/New_York';
+  const usdcNy = generateInvoicePDF(paidInvoice);
+  const xlmNy = generateInvoicePDF(paidXlmInvoice);
+  process.env.TZ = 'UTC';
+
+  assert.equal(usdcUtc, usdcNy, 'USDC invoice export drifted between timezones');
+  assert.equal(xlmUtc, xlmNy, 'XLM invoice export drifted between timezones');
+});
+
+test('paid invoice export carries hash, explorer URL, and canonical amount', () => {
+  const html = generateInvoicePDF(paidInvoice);
+  assert.ok(html.includes(TX_HASH), 'transaction hash must appear in the export');
+  assert.ok(html.includes('stellar.expert/explorer/testnet'), 'explorer URL must name the network');
+  assert.ok(html.includes('250.5000000'), 'amount must print as the canonical stroop string');
+
+  const xlmHtml = generateInvoicePDF(paidXlmInvoice);
+  assert.ok(xlmHtml.includes('42.5000000'), 'numeric amount must canonicalize');
+  assert.ok(xlmHtml.includes('Payment settled: Sep 13, 2026, 09:21 UTC'));
+  assert.ok(!/Generated on/.test(xlmHtml), 'no wall-clock token may appear in the export');
+});
+
+test('unpaid invoices still refuse export through generateInvoicePDF', () => {
+  assert.throws(() => generateInvoicePDF(pendingInvoice), /paid/i);
+});
+
+const GOLDEN_INVOICE_USDC = fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'golden-invoice-usdc.html'),
+  'utf8'
+);
+const GOLDEN_INVOICE_XLM = fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'golden-invoice-xlm.html'),
+  'utf8'
+);
+
+test('paid invoice exports match the golden fixtures byte for byte', () => {
+  assert.equal(generateInvoicePDF(paidInvoice), GOLDEN_INVOICE_USDC);
+  assert.equal(generateInvoicePDF(paidXlmInvoice), GOLDEN_INVOICE_XLM);
 });

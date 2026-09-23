@@ -1,4 +1,7 @@
 import { format } from 'date-fns';
+import { canonicalAmount } from './stroop-amount.js';
+import { formatUtcDate, formatUtcDateTime } from './utc-format.js';
+import { formatProofTimestamp } from './proof-timestamp.ts';
 import {
   assertPaymentProofAvailable,
   canExportPaymentProof,
@@ -13,6 +16,10 @@ import {
   openInvoiceMailto,
   openProofMailto,
 } from './mailto-delivery.js';
+
+// The explorer rule is shared with the receipt and the proof email, so the
+// printed document cannot name a different network from the link it prints.
+import { buildHorizonTxUrl, resolveExplorerNetwork } from './explorer-tx-link.ts';
 
 import {
   buildQuittanceProof,
@@ -120,19 +127,19 @@ export function generateInvoiceCSV(invoices: Invoice[]): string {
 
   const rows = invoices.map((inv) => [
     inv.id,
-    format(new Date(inv.createdAt), 'yyyy-MM-dd HH:mm:ss'),
+    formatProofTimestamp(inv.createdAt) ?? '',
     inv.sellerName || '',
     inv.sellerEmail || '',
     inv.customerName || '',
     inv.customerEmail || '',
     inv.description || '',
-    inv.amount,
+    canonicalAmount(inv.amount) ?? inv.amount,
     inv.assetCode,
     inv.status,
-    inv.paidAt ? format(new Date(inv.paidAt), 'yyyy-MM-dd HH:mm:ss') : '',
+    inv.paidAt ? formatProofTimestamp(inv.paidAt) ?? '' : '',
     inv.payerName || '',
     inv.payerEmail || '',
-    format(new Date(inv.expiresAt), 'yyyy-MM-dd HH:mm:ss'),
+    formatProofTimestamp(inv.expiresAt) ?? '',
     inv.memo,
     inv.paymentTxHash || '',
   ]);
@@ -174,8 +181,16 @@ export function generateInvoicePDF(invoiceOrProof: Invoice | QuittanceProof): st
   }
   const invoice = invoiceOrProof;
   assertPaymentProofAvailable(invoice);
-  const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK === 'TESTNET' ? 'Testnet' : 'Mainnet';
+  const explorerNetwork = resolveExplorerNetwork(invoice);
+  const network = explorerNetwork === 'testnet' ? 'Testnet' : 'Mainnet';
   const isPaid = invoice.status === 'PAID';
+  /*
+   * A paid invoice has to print where its transaction can be checked, and on
+   * the network it actually settled on (issue #434). The hash is validated by
+   * the builder, so an unfinished or malformed hash prints no link rather than
+   * a URL that resolves to nothing.
+   */
+  const explorerUrl = isPaid ? buildHorizonTxUrl(invoice.paymentTxHash, explorerNetwork) : null;
   const warning = latePaymentWarning(invoice);
 
   return `
@@ -361,13 +376,13 @@ export function generateInvoicePDF(invoiceOrProof: Invoice | QuittanceProof): st
       <h3>Invoice Details</h3>
       <div class="info-row">
         <div class="info-label">Issue Date</div>
-        <div class="info-value">${format(new Date(invoice.createdAt), 'MMM dd, yyyy')}</div>
+        <div class="info-value">${formatUtcDate(invoice.createdAt) ?? escapeHtml(String(invoice.createdAt))}</div>
       </div>
       <div class="info-row">
         <div class="info-label">Expires</div>
-        <div class="info-value">${format(new Date(invoice.expiresAt), 'MMM dd, yyyy')}</div>
+        <div class="info-value">${formatUtcDate(invoice.expiresAt) ?? escapeHtml(String(invoice.expiresAt))}</div>
       </div>
-      ${isPaid ? `<div class="info-row"><div class="info-label">Payment Date</div><div class="info-value">${format(new Date(invoice.settledAt || invoice.paidAt!), 'MMM dd, yyyy HH:mm')}</div></div>` : ''}
+      ${isPaid ? `<div class="info-row"><div class="info-label">Payment Date</div><div class="info-value">${formatUtcDateTime(invoice.settledAt || invoice.paidAt!) ?? escapeHtml(String(invoice.settledAt || invoice.paidAt))}</div></div>` : ''}
     </div>
   </div>
 
@@ -387,7 +402,7 @@ export function generateInvoicePDF(invoiceOrProof: Invoice | QuittanceProof): st
 
   <div class="amount-section">
     <div class="amount-label">Amount ${isPaid ? 'Paid' : 'Due'}</div>
-    <div class="amount-value">${invoice.amount}</div>
+    <div class="amount-value">${escapeHtml(canonicalAmount(invoice.amount) ?? String(invoice.amount))}</div>
     <div class="amount-asset">${escapeHtml(invoice.assetCode)}</div>
   </div>
 
@@ -401,17 +416,18 @@ export function generateInvoicePDF(invoiceOrProof: Invoice | QuittanceProof): st
     <tr><td>Seller Address</td><td style="font-family: monospace; font-size: 11px; word-break: break-all;">${escapeHtml(invoice.sellerPublicKey)}</td></tr>
     ${isPaid && invoice.paymentTxHash ? `
     <tr><td>Transaction Hash</td><td style="font-family: monospace; font-size: 11px; word-break: break-all;">${escapeHtml(invoice.paymentTxHash)}</td></tr>
+    ${explorerUrl ? `<tr><td>Explorer</td><td style="font-size: 11px; word-break: break-all;"><a href="${escapeHtml(explorerUrl)}">${escapeHtml(explorerUrl)}</a></td></tr>` : ''}
     <tr><td>Payer Address</td><td style="font-family: monospace; font-size: 11px; word-break: break-all;">${escapeHtml(invoice.payerPublicKey || 'N/A')}</td></tr>
     ${invoice.payerName ? `<tr><td>Payer Name</td><td>${escapeHtml(invoice.payerName)}</td></tr>` : ''}
     ${invoice.payerEmail ? `<tr><td>Payer Email</td><td>${escapeHtml(invoice.payerEmail)}</td></tr>` : ''}` : ''}
     <tr><td>Network</td><td>${network}</td></tr>
   </table>
 
-  ${isPaid ? `<div class="blockchain-info"><p><strong>Payment Verified</strong></p><p>This payment has been verified and recorded on the Stellar blockchain.</p></div>` : ''}
+  ${isPaid ? `<div class="blockchain-info"><p><strong>Payment Verified</strong></p><p>This payment has been verified and recorded on the Stellar blockchain.</p>${explorerUrl ? `<p><a href="${escapeHtml(explorerUrl)}">View this transaction on Stellar Expert</a></p>` : ''}</div>` : ''}
 
   <div class="footer">
     <p><strong>Quittance</strong> - Stellar Payment Platform</p>
-    <p>Generated on ${format(new Date(), 'PPpp')}</p>
+    <p>Payment settled: ${formatUtcDateTime(invoice.settledAt || invoice.paidAt) ?? 'not recorded'}</p>
     <p style="margin-top: 10px;">This is an automatically generated invoice.</p>
   </div>
 

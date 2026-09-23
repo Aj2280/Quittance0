@@ -9,6 +9,7 @@ import {
   isUnderpaid,
   isOverpaid,
   describeAmountDelta,
+  canonicalAmount,
 } from '../src/utils/safe-amount-compare';
 
 describe('safe-amount-compare — constants', () => {
@@ -48,6 +49,16 @@ describe('safe-amount-compare — parseStroops', () => {
     assert.equal(parseStroops(100n), 100n);
   });
 
+  it('parses numbers that stringify in exponential notation', () => {
+    // A one-stroop invoice arrives as the double 1e-7; the parser must expand
+    // the exponent instead of rejecting it.
+    assert.equal(parseStroops(0.0000001), 1n);
+    assert.equal(parseStroops(1e-7), 1n);
+    assert.equal(parseStroops(1.5e-7), 2n); // rounds half-up at the 8th digit
+    assert.equal(parseStroops(1e21), 10_000_000_000_000_000_000_000_000_000n);
+    assert.equal(parseStroops(2.5e-3), 25_000n);
+  });
+
   it('returns null for negative, invalid, or malformed values', () => {
     assert.equal(parseStroops('-1'), null);
     assert.equal(parseStroops(-5), null);
@@ -75,6 +86,25 @@ describe('safe-amount-compare — formatStroops', () => {
   it('formats negative stroop counts', () => {
     assert.equal(formatStroops(-10_000_000n), '-1.0000000');
     assert.equal(formatStroops(-500_000n), '-0.0500000');
+  });
+});
+
+describe('safe-amount-compare — canonicalAmount', () => {
+  it('normalizes mixed representations to the compared stroop string', () => {
+    assert.equal(canonicalAmount(0.0000001), '0.0000001');
+    assert.equal(canonicalAmount('0.0000001'), '0.0000001');
+    assert.equal(canonicalAmount(10), '10.0000000');
+    assert.equal(canonicalAmount('10.0000000'), '10.0000000');
+    assert.equal(canonicalAmount('10'), '10.0000000');
+    assert.equal(canonicalAmount('  0042.5000000  '), '42.5000000');
+    assert.equal(canonicalAmount(1e-7), '0.0000001');
+    assert.equal(canonicalAmount(0.1), '0.1000000');
+  });
+
+  it('returns null for unparseable amounts', () => {
+    assert.equal(canonicalAmount('abc'), null);
+    assert.equal(canonicalAmount(-1), null);
+    assert.equal(canonicalAmount(undefined), null);
   });
 });
 

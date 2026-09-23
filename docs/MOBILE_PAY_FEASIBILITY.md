@@ -118,6 +118,40 @@ Freighter operates through a browser extension content script injecting `window.
 
 ---
 
+## Return and Resume Contract
+
+Signing in a mobile wallet leaves the browser; when the wallet returns the
+payer, `/pay/[id]` remounts with no in-memory state. The page supports exactly
+one return contract:
+
+```text
+<origin>/pay/<invoiceId>?tx=<64-hex transaction hash>
+```
+
+- **`tx` is validated, never trusted.** It must satisfy the same
+  `checkTxHash` rule as a pasted hash before the page starts verification.
+  A malformed `tx` is ignored, not surfaced as an error.
+- **Same-origin `/pay/` only.** `return_url`, `callback`, `redirect` and
+  `redirect_uri` parameters pointing at any other origin — or any path that
+  is not `/pay/<id>` — are refused. The pay page never navigates to a
+  caller-supplied return target, so it cannot be turned into an open
+  redirect.
+- **SEP-0007 callback.** The `web+stellar:pay` deep link carries
+  `callback=url:<origin>/pay/<invoiceId>`, built by `buildPayCallbackUrl`
+  from the page's own origin — never from request input. Wallets that honour
+  SEP-0007 callbacks bring the payer back to the same invoice page.
+- **Non-secret resume.** The pay session persists only `{ invoiceId, txHash }`
+  in `sessionStorage` (per-tab, cleared when the tab closes) — mirroring the
+  invoice-draft rules. A transaction hash is public ledger data; no public
+  keys, signatures or wallet tokens are stored. On return without a `?tx=`,
+  a stored hash for *this* invoice is restored into the verify input with a
+  resume note; the payer still confirms verification themselves.
+- **Live regions.** The resumed verification drives the same
+  `#payment-result` live region as a manual verify, so the state transition
+  is announced to assistive technology.
+
+---
+
 ## User-Facing Copy Specification
 
 All customer-facing copy is frozen and centralized in `frontend/lib/mobile-fallback-copy.ts` to prevent UI drift and maintain tone standards:

@@ -10,12 +10,13 @@ import {
   getUserPublicKey,
   getAccountBalance,
   describeStellarNetworkError,
-  getFreighterNetwork,
   isWrongNetwork as checkIsWrongNetwork,
   NETWORK_DISPLAY_NAME,
   EXPECTED_WALLET_NETWORK,
 } from '@/lib/stellar';
 import { useWalletStore } from '@/lib/store';
+import { networkLabel, walletGate } from '@/lib/freighter-availability';
+import { explorerSegmentFor, resolveStellarNetwork } from '@shared/network';
 import { paymentMonitor } from '@/lib/payment-monitor';
 import { Wallet, LogOut, Loader2, ExternalLink, Bell, BellOff, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
@@ -34,17 +35,19 @@ export default function WalletConnect({ onConnect }: WalletConnectProps = {}) {
     publicKey,
     balance,
     connected,
+    freighterAvailable,
     isWrongNetwork,
     network,
     networkPassphrase,
-    freighterAvailable,
     setWallet,
     setNetwork,
     setIsWrongNetwork,
     disconnect,
   } = useWalletStore();
+  // Connect, disconnect and the monitoring toggle all ask the same gate
+  // whether the wallet may act, so the button and the banner agree.
   const gate = walletGate(
-    { freighterAvailable, connected, publicKey, network },
+    { freighterAvailable, connected, publicKey, network, networkPassphrase },
     EXPECTED_WALLET_NETWORK
   );
 
@@ -149,7 +152,9 @@ export default function WalletConnect({ onConnect }: WalletConnectProps = {}) {
   };
 
   const openExplorer = () => {
-    const net = process.env.NEXT_PUBLIC_STELLAR_NETWORK === 'TESTNET' ? 'testnet' : 'public';
+    const net = explorerSegmentFor(
+      resolveStellarNetwork(process.env.NEXT_PUBLIC_STELLAR_NETWORK)
+    );
     window.open(`https://stellar.expert/explorer/${net}/account/${publicKey}`, '_blank');
   };
 

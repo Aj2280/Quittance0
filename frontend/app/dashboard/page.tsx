@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { invoiceApi, describeApiError } from '@/lib/api';
+import { useEffect, useRef, useState } from 'react';
+import { invoiceApi } from '@/lib/api';
 import InvoiceCard from '@/components/InvoiceCard';
 import WalletConnect from '@/components/WalletConnect';
 import UserProfile from '@/components/UserProfile';
@@ -9,13 +9,19 @@ import FreighterInstallPrompt from '@/components/FreighterInstallPrompt';
 import AssetLogo from '@/components/AssetLogo';
 import { useWalletStore } from '@/lib/store';
 import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
-import { walletGate } from '@/lib/freighter-availability';
+import {
+  normalizeWalletSession,
+  shouldClearSellerState,
+  walletSessionGate,
+  walletSessionKey,
+} from '@/lib/wallet-session';
 import Link from 'next/link';
 import { Loader2, Plus, TrendingUp, DollarSign, FileText, Download, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { downloadInvoiceCSV } from '@/lib/export';
 import {
   dashboardDataFor,
+  applyInvoiceCancellation,
   exportableInvoices,
   hasAnyInvoices as hasAnyInvoicesIn,
   revenueEntries,
@@ -32,11 +38,20 @@ import { DASHBOARD_RESULTS_ID, MAIN_CONTENT_ID, describeAmount, statusText } fro
 import { NETWORK_DISPLAY_NAME } from '@/lib/stellar';
 
 export default function DashboardPage() {
-  const { publicKey, connected, isWrongNetwork, network, freighterAvailable } = useWalletStore();
-  const gate = walletGate(
-    { freighterAvailable, connected, publicKey, network },
-    EXPECTED_WALLET_NETWORK
-  );
+  const { publicKey, connected, network, freighterAvailable, isWrongNetwork } =
+    useWalletStore();
+  // One session for the whole page: the gate, the rows it may show, the stats
+  // it may count and the request it may send all read from this value.
+  const session = normalizeWalletSession({
+    publicKey,
+    connected,
+    network,
+    freighterAvailable,
+  });
+  const gate = walletSessionGate(session, EXPECTED_WALLET_NETWORK);
+  // The key is a string, so the clearing effect below depends on the account
+  // rather than on a fresh session object on every render.
+  const sessionKey = walletSessionKey(session);
   // Loaded data is tagged with the wallet it belongs to, so a response for a
   // previous seller can never be rendered under the current one.
   const [loaded, setLoaded] = useState<{ owner: string | null; invoices: any[]; stats: any }>({
@@ -66,6 +81,21 @@ export default function DashboardPage() {
     const timer = window.setInterval(() => setLifecycleNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // A different account must not keep the previous seller's invoices on
+  // screen while the next request is in flight: the rows and counts are
+  // cleared on the session change, before the fetch resolves.
+  const previousSession = useRef<ReturnType<typeof normalizeWalletSession> | null>(null);
+  useEffect(() => {
+    const previous = previousSession.current;
+    // Only a genuine switch clears: on the first pass nothing is loaded, and
+    // a disconnected session must not re-clear on every render.
+    if (previous !== null && shouldClearSellerState(previous, session)) {
+      setLoaded({ owner: null, invoices: [], stats: null });
+    }
+    previousSession.current = session;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionKey]);
 
   useEffect(() => {
     if (!gate.ready || !publicKey) {
@@ -112,22 +142,9 @@ export default function DashboardPage() {
   }, [filter, gate.ready, publicKey, reloadKey]);
 
   const handleInvoiceCancelled = (cancelledId: string) => {
-    setLoaded((prev) => {
-      if (!prev.invoices) return prev;
-      const updatedInvoices = prev.invoices.map((inv) =>
-        inv.id === cancelledId ? { ...inv, status: 'CANCELLED' } : inv
-      );
-      return {
-        ...prev,
-        invoices: updatedInvoices,
-        stats: prev.stats
-          ? {
-              ...prev.stats,
-              pending_invoices: Math.max(0, Number(prev.stats.pending_invoices || 0) - 1),
-            }
-          : prev.stats,
-      };
-    });
+    // The wallet the user acted in, not whichever one is connected when the
+    // request resolves. applyInvoiceCancellation refuses the update otherwise.
+    setLoaded((prev) => applyInvoiceCancellation(prev, publicKey, cancelledId));
     setReloadKey((k) => k + 1);
   };
 

@@ -21,8 +21,11 @@
 //   'INVALID_PAYER_EMAIL' | 'PAYER_INFO_TOO_LONG' | 'INVOICE_ALREADY_PAID' |
 //   'VERIFY_RATE_LIMIT_EXCEEDED' | 'INVOICE_EXPIRED' | 'INVOICE_NOT_PENDING' |
 //   'TRANSACTION_NOT_FOUND' | 'TRANSACTION_CLOSE_TIME_UNAVAILABLE' |
-//   'NO_PAYMENT_OPERATION' | 'MEMO_MISMATCH' | 'DESTINATION_MISMATCH' |
-//   'AMOUNT_MISMATCH' | 'ASSET_MISMATCH' | 'NETWORK_MISMATCH' |
+//   'VERIFY_UNAVAILABLE' |
+//   'NO_PAYMENT_OPERATION' | 'AMBIGUOUS_PAYMENT_OPERATION' | 'MEMO_TYPE_MISMATCH' | 'MEMO_MISMATCH' |
+//   'DESTINATION_MISMATCH' |
+//   'AMOUNT_MISMATCH' | 'AMOUNT_TOO_LOW' | 'AMOUNT_TOO_HIGH' |
+//   'ASSET_MISMATCH' | 'NETWORK_MISMATCH' |
 //   'TX_HASH_ALREADY_USED' | 'UNKNOWN_VERIFICATION_ERROR'} VerificationCodeLabel
 
 const UNKNOWN_LABEL = 'Unknown verification error';
@@ -49,10 +52,15 @@ const REJECTION_LABELS: Record<string, string> = {
   INVOICE_NOT_PENDING: 'Invoice not pending',
   TRANSACTION_NOT_FOUND: 'Transaction not found',
   TRANSACTION_CLOSE_TIME_UNAVAILABLE: 'Close time unavailable',
+  VERIFY_UNAVAILABLE: 'Verification unavailable',
   NO_PAYMENT_OPERATION: 'No payment operation',
+  AMBIGUOUS_PAYMENT_OPERATION: 'Multiple payments to seller',
+  MEMO_TYPE_MISMATCH: 'Not a text memo',
   MEMO_MISMATCH: 'Memo mismatch',
   DESTINATION_MISMATCH: 'Destination mismatch',
   AMOUNT_MISMATCH: 'Amount mismatch',
+  AMOUNT_TOO_LOW: 'Amount below invoice',
+  AMOUNT_TOO_HIGH: 'Amount above invoice',
   ASSET_MISMATCH: 'Asset mismatch',
   NETWORK_MISMATCH: 'Network mismatch',
   TX_HASH_ALREADY_USED: 'Transaction already used',

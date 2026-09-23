@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiErrorMessage, invoiceApi, isApiUnavailableError } from '@/lib/api';
 import { toast } from 'sonner';
 import { Loader2, AlertTriangle } from 'lucide-react';
@@ -10,10 +10,17 @@ import { NETWORK_DISPLAY_NAME } from '@/lib/stellar';
 import { showFreighterWrongNetworkPrompt } from './FreighterInstallPrompt';
 import AssetLogo from './AssetLogo';
 import ApiErrorState from './ApiErrorState';
-import { useWalletStore } from '@/lib/store';
-import { walletGate } from '@/lib/freighter-availability';
+import { walletSessionGate } from '@/lib/wallet-session';
 import { EXPECTED_WALLET_NETWORK } from '@/lib/stellar';
 import { showFreighterInstallPrompt } from './FreighterInstallPrompt';
+import { parseAmountInput } from '@/lib/parse-amount-input';
+import { clearInvoiceDraft, loadInvoiceDraft, saveInvoiceDraft } from '@/lib/invoice-draft';
+import {
+  fieldErrorSummary,
+  fieldErrorsFromApiError,
+  firstInvalidFieldId,
+  formFieldErrors,
+} from '@/lib/invoice-form-validation';
 
 interface InvoiceFormProps {
   onSuccess?: (invoice: any) => void;
@@ -23,22 +30,69 @@ interface InvoiceFormProps {
 export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps) {
   const { publicKey, connected, network, freighterAvailable } = useWalletStore();
   const [loading, setLoading] = useState(false);
-  const [amount, setAmount] = useState('');
-  const [assetCode, setAssetCode] = useState('XLM');
-  const [description, setDescription] = useState('');
-  const [sellerName, setSellerName] = useState('');
-  const [sellerEmail, setSellerEmail] = useState('');
-  const [customerName, setCustomerName] = useState('');
-  const [customerEmail, setCustomerEmail] = useState('');
+  // The page renders this form only while the wallet gate is ready, so a
+  // Freighter disconnect unmounts it. The draft is read once on mount so the
+  // fields someone had typed come back; only typed fields are stored, never
+  // anything about the wallet (issue #442, lib/invoice-draft.js).
+  const [initialDraft] = useState(() => loadInvoiceDraft());
+  const [amount, setAmount] = useState(initialDraft.amount ?? '');
+  const [assetCode, setAssetCode] = useState(initialDraft.assetCode ?? 'XLM');
+  const [description, setDescription] = useState(initialDraft.description ?? '');
+  const [sellerName, setSellerName] = useState(initialDraft.sellerName ?? '');
+  const [sellerEmail, setSellerEmail] = useState(initialDraft.sellerEmail ?? '');
+  const [customerName, setCustomerName] = useState(initialDraft.customerName ?? '');
+  const [customerEmail, setCustomerEmail] = useState(initialDraft.customerEmail ?? '');
   const [apiError, setApiError] = useState<string | null>(null);
-  const [expiresInDays, setExpiresInDays] = useState(7);
+  // Keyed by payload field, whether the shared rule set or the API produced
+  // them, so both routes render in the same place.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [expiresInDays, setExpiresInDays] = useState(initialDraft.expiresInDays ?? 7);
+  // One create intent per draft: retries after a timeout replay this key so the
+  // server returns the original invoice instead of minting a second pay link
+  // (issue #514). Rotated only after a confirmed create — a failed attempt must
+  // keep the key so the retry can find its original.
+  const idempotencyKeyRef = useRef<string>(crypto.randomUUID());
   const { isWrongNetwork } = useWalletStore();
+
+  // Focus follows the refusal: a keyboard user who pressed Create should land
+  // on the input that needs them, not stay on the button that refused.
+  const focusField = (elementId: string | null) => {
+    if (elementId && typeof document !== 'undefined') {
+      document.getElementById(elementId)?.focus();
+    }
+  };
+
+  // Whatever is typed is kept for the next mount, so a disconnect in the middle
+  // of filling the form costs nothing.
+  useEffect(() => {
+    saveInvoiceDraft({
+      amount,
+      assetCode,
+      description,
+      sellerName,
+      sellerEmail,
+      customerName,
+      customerEmail,
+      expiresInDays,
+    });
+  }, [
+    amount,
+    assetCode,
+    description,
+    sellerName,
+    sellerEmail,
+    customerName,
+    customerEmail,
+    expiresInDays,
+  ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const sellerWallet = userWallet || publicKey || undefined;
-    const gate = walletGate(
+    // The session module normalises the store first, so a store that claims
+    // connected without a public key cannot enable the submit button.
+    const gate = walletSessionGate(
       { freighterAvailable, connected, publicKey: sellerWallet, network },
       EXPECTED_WALLET_NETWORK
     );
@@ -52,20 +106,36 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
       return;
     }
 
-    if (!amount || parseFloat(amount) <= 0) {
-      toast.error('Enter a valid amount');
+    // One parser and one rule set for the whole create path, asked before the
+    // request so the message under an input is the sentence the server would
+    // have answered with - the two local regexes and the toast-only checks are
+    // gone. When the parser refuses, the raw text goes along: an empty box and
+    // letters in the box are different mistakes.
+    const parsedValue = parseAmountInput(amount);
+    const parsedAmount = parsedValue as number;
+
+    const preflight = formFieldErrors({
+      sellerPublicKey: sellerWallet,
+      amount:
+        parsedValue === null && amount.trim() !== '' ? amount.trim() : parsedValue ?? undefined,
+      assetCode,
+      assetIssuer: getAssetByCode(assetCode)?.issuer,
+      description: description || undefined,
+      customerName: customerName.trim() || undefined,
+      customerEmail: customerEmail.trim() || undefined,
+      sellerName: sellerName.trim() || undefined,
+      sellerEmail: sellerEmail.trim() || undefined,
+      expiresInDays,
+      network: EXPECTED_WALLET_NETWORK,
+    });
+
+    if (Object.keys(preflight).length > 0) {
+      setFieldErrors(preflight);
+      focusField(firstInvalidFieldId(preflight));
       return;
     }
 
-    if (customerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) {
-      toast.error('Enter a valid client email');
-      return;
-    }
-
-    if (sellerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sellerEmail)) {
-      toast.error('Enter a valid email for yourself');
-      return;
-    }
+    setFieldErrors({});
 
     setLoading(true);
     setApiError(null);
@@ -84,9 +154,11 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
         description: description || undefined,
         customerName: customerName.trim() || undefined,
         customerEmail: customerEmail.trim() || undefined,
+        idempotencyKey: idempotencyKeyRef.current,
       });
 
       toast.success('Invoice created');
+      idempotencyKeyRef.current = crypto.randomUUID();
       onSuccess?.(result.data);
       setAmount('');
       setAssetCode('XLM');
@@ -96,7 +168,19 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
       setCustomerName('');
       setCustomerEmail('');
       setExpiresInDays(7);
+      // The invoice exists now, so the draft has served its purpose.
+      clearInvoiceDraft();
     } catch (error: any) {
+      // A refusal that names fields belongs under those fields; anything else
+      // (an unreachable API, a 500) keeps the banner-and-toast path.
+      const serverFieldErrors = fieldErrorsFromApiError(error);
+      if (Object.keys(serverFieldErrors).length > 0) {
+        setFieldErrors(serverFieldErrors);
+        focusField(firstInvalidFieldId(serverFieldErrors));
+        toast.error(fieldErrorSummary(serverFieldErrors) || 'Could not create the invoice');
+        return;
+      }
+
       const message = apiErrorMessage(error, 'Failed to create invoice');
       if (isApiUnavailableError(error)) setApiError(message);
       toast.error(message);
@@ -149,7 +233,12 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
             min="0.0000001"
             required
             aria-required="true"
-            aria-describedby="invoice-amount-hint"
+            aria-invalid={fieldErrors.amount ? true : undefined}
+            aria-describedby={
+              fieldErrors.amount
+                ? 'invoice-amount-hint invoice-amount-error'
+                : 'invoice-amount-hint'
+            }
             className="input flex-1 text-2xl font-semibold"
             placeholder="10.00"
             value={amount}
@@ -187,6 +276,11 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
             ? 'The amount your client pays in USDC (requires a USDC trustline on Stellar).'
             : 'The amount your client pays, in the selected asset.'}
         </p>
+        {fieldErrors.amount && (
+          <p id="invoice-amount-error" className="field-hint text-red-600" role="alert">
+            {fieldErrors.amount}
+          </p>
+        )}
       </div>
 
       <div>
@@ -255,7 +349,14 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
             value={sellerEmail}
             onChange={(e) => setSellerEmail(e.target.value)}
             maxLength={255}
+            aria-invalid={fieldErrors.sellerEmail ? true : undefined}
+            aria-describedby={fieldErrors.sellerEmail ? 'seller-email-error' : undefined}
           />
+          {fieldErrors.sellerEmail && (
+            <p id="seller-email-error" className="field-hint text-red-600" role="alert">
+              {fieldErrors.sellerEmail}
+            </p>
+          )}
         </div>
       </div>
 
@@ -283,7 +384,12 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
           id="customer-email"
           name="customerEmail"
           type="email"
-          aria-describedby="customer-email-hint"
+          aria-invalid={fieldErrors.customerEmail ? true : undefined}
+          aria-describedby={
+            fieldErrors.customerEmail
+              ? 'customer-email-hint customer-email-error'
+              : 'customer-email-hint'
+          }
           className="input text-sm"
           placeholder="client@example.com"
           value={customerEmail}
@@ -293,6 +399,11 @@ export default function InvoiceForm({ onSuccess, userWallet }: InvoiceFormProps)
         <p id="customer-email-hint" className="field-hint">
           Used only to send the invoice or payment proof. Not required to create an invoice.
         </p>
+        {fieldErrors.customerEmail && (
+          <p id="customer-email-error" className="field-hint text-red-600" role="alert">
+            {fieldErrors.customerEmail}
+          </p>
+        )}
       </div>
 
       <button

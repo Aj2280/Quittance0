@@ -41,8 +41,17 @@ After a successful pay, copy the hash from the receipt or Freighter history.
 ### Automated Testnet smoke pack
 
 The backend package includes one command that performs the reviewer path
-against a deployed API: health → readiness → create invoice → submit a real
-Testnet XLM payment → verify → read back `PAID` → write a JSON artifact.
+against a deployed API: health → readiness → create invoice → read the pay
+link → submit a real Testnet XLM payment → verify → read back `PAID` → prove
+verification still refuses a transaction that settled another invoice → write a
+JSON artifact.
+
+It ends with a labelled summary (invoice id, status, pay link, amount, memo, tx
+hash, explorer URL) so the reviewer can copy the values straight into the tables
+below, and it exits non-zero if any step fails — including the negative
+verification, which is what makes a passing run mean something: a `verify` that
+ignored the memo would accept the first invoice's transaction for a second one,
+and this run would fail.
 
 Required environment variables:
 
@@ -79,9 +88,10 @@ artifacts are ignored by git.
 The JSON artifact must contain:
 
 - [ ] API, health, readiness, frontend, source revision, network, and capture time
-- [ ] Invoice ID, exact XLM amount, memo, and seller/payer public keys
+- [ ] Invoice ID, exact XLM amount, memo, seller/payer public keys, and the pay link
 - [ ] 64-character transaction hash and Testnet Stellar Expert URL
-- [ ] `createdPending`, `paymentSubmitted`, `verifiedPaid`, and `rereadPaid` checks
+- [ ] `createdPending`, `payLinkReturned`, `paymentSubmitted`, `verifiedPaid`, and `rereadPaid` checks
+- [ ] `negativeVerifyRejected: true`: a second invoice was refused the first invoice's transaction
 - [ ] `simulationDisabled: true` and final status `PAID`
 - [ ] no payer secret, auth token, cookie, or secret key
 

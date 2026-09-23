@@ -1,6 +1,7 @@
 'use client';
 
 import { formatAmount, formatDate } from '@/lib/utils';
+import { canonicalAmount } from '@/lib/stroop-amount';
 import { describeAmount } from '@/lib/a11y';
 import { Check, Download, ExternalLink, FileText, Mail } from 'lucide-react';
 import AssetLogo from './AssetLogo';
@@ -8,8 +9,7 @@ import { openInvoicePDF, emailPaymentProof } from '@/lib/export';
 import { canSendProofEmail, getProofMailtoRecipient } from '@/lib/mailto-delivery';
 import { toast } from 'sonner';
 import type { PayPageInvoice } from './pay-page.types';
-import { buildHorizonTxUrl } from '@/lib/explorer-tx-link';
-import { getExplorerTransactionUrl } from '@/lib/stellar';
+import { buildHorizonTxUrl, resolveExplorerNetwork } from '@/lib/explorer-tx-link';
 // The receipt renders a settled (paid / expired / cancelled) record. It shares
 // the same status vocabulary as PaymentStatus and the verification rejection
 // table, so the proof view and the pay page never disagree on wording.
@@ -66,7 +66,7 @@ ${warning ? `Warning: ${warning.title}. ${warning.body}` : ''}
 PAYMENT DETAILS
 ───────────────────────────────────────
 
-Amount Paid: ${formatAmount(invoice.amount, 7)} ${invoice.assetCode}
+Amount Paid: ${canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7)} ${invoice.assetCode}
 ${invoice.description ? `Description: ${invoice.description}` : ''}
 ${invoice.customerName ? `Customer: ${invoice.customerName}` : ''}
 ${invoice.customerEmail ? `Email: ${invoice.customerEmail}` : ''}
@@ -104,7 +104,21 @@ Stellar Blockchain Payment System
   };
 
   const activeAssetCode = invoice.assetCode || 'XLM';
-  const amountLabel = describeAmount(formatAmount(invoice.amount, 7), activeAssetCode);
+  const amountLabel = describeAmount(
+    canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7),
+    activeAssetCode
+  );
+  /*
+   * The explorer link has to follow the network the payment was made on. A
+   * hardcoded 'public' sent a testnet seller to a mainnet page that can never
+   * show their transaction, and `buildHorizonTxUrl` refuses a hash that is not
+   * a real transaction id, so the row is only rendered when there is
+   * something to link to.
+   */
+  const explorerUrl = buildHorizonTxUrl(
+    invoice.paymentTxHash,
+    resolveExplorerNetwork(invoice)
+  );
   const canEmail = Boolean(invoice.customerEmail);
   const proofRecipient = getProofMailtoRecipient(invoice as any);
   const emailReasonId = 'receipt-email-reason';
@@ -154,7 +168,7 @@ Stellar Blockchain Payment System
             <AssetLogo code={invoice.assetCode} size={36} showName={false} decorative />
             <div aria-hidden="true">
               <p className="text-4xl font-bold text-green-700">
-                {formatAmount(invoice.amount, 7)}
+                {canonicalAmount(invoice.amount) ?? formatAmount(invoice.amount, 7)}
               </p>
               <p className="text-lg font-semibold text-green-700 mt-1">
                 {invoice.assetCode}
@@ -283,19 +297,18 @@ Stellar Blockchain Payment System
           </p>
         )}
 
-        <a
-          href={
-            buildHorizonTxUrl(invoice.paymentTxHash, 'public') ??
-            getExplorerTransactionUrl(invoice.paymentTxHash || '')
-          }
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn btn-outline w-full flex items-center justify-center gap-2"
-        >
-          <ExternalLink className="w-5 h-5" aria-hidden="true" />
-          View on Stellar Explorer
-          <span className="sr-only"> (opens in a new tab)</span>
-        </a>
+        {explorerUrl && (
+          <a
+            href={explorerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-outline w-full flex items-center justify-center gap-2"
+          >
+            <ExternalLink className="w-5 h-5" aria-hidden="true" />
+            View on Stellar Explorer
+            <span className="sr-only"> (opens in a new tab)</span>
+          </a>
+        )}
 
         <button
           onClick={handleDownload}

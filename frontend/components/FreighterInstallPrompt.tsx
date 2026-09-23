@@ -9,6 +9,7 @@ import {
   FREIGHTER_WRONG_NETWORK_MESSAGE,
 } from '@/lib/freighter-availability';
 import { freighterInstallMessage } from '@/lib/freighter-prompt-copy';
+import type { WalletGateResult } from '@/lib/freighter-availability';
 
 const FREIGHTER_TOAST_ID = 'freighter-not-installed';
 const FREIGHTER_NETWORK_TOAST_ID = 'freighter-wrong-network';
@@ -61,11 +62,20 @@ export const showFreighterWrongNetworkPrompt = (targetNetwork = 'Testnet') => {
 
 interface FreighterInstallPromptProps {
   gate?: WalletGateResult;
+  /** The control the caller wants beside the message, usually WalletConnect. */
   action?: ReactNode;
   compact?: boolean;
   className?: string;
 }
 
+/**
+ * The prompt three pages render when the wallet cannot act.
+ *
+ * It renders nothing once the gate is ready: the pages guard it themselves,
+ * but a component that disappears when its reason is gone cannot be left on
+ * screen by a stale prop. The caller owns the call to action, this component
+ * owns the explanation, and both come from the same gate.
+ */
 export default function FreighterInstallPrompt({
   gate = defaultGate,
   action,
@@ -81,6 +91,7 @@ export default function FreighterInstallPrompt({
       } ${className}`}
       role="status"
       aria-live="polite"
+      data-gate-status={gate.status}
     >
       <div className={`flex ${compact ? 'items-start text-left' : 'flex-col items-center'} gap-3`}>
         <AlertTriangle className="w-6 h-6 text-amber-700 shrink-0" aria-hidden="true" />
@@ -98,11 +109,10 @@ export default function FreighterInstallPrompt({
               <ExternalLink className="w-4 h-4" aria-hidden="true" />
               <span className="sr-only"> (opens in a new tab)</span>
             </a>
-          ) : action ? (
-            <div className={compact ? '' : 'flex justify-center'}>{action}</div>
           ) : null}
         </div>
       </div>
+      {action ? <div className={compact ? '' : 'mt-3 flex justify-center'}>{action}</div> : null}
     </div>
   );
 }

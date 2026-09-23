@@ -4,6 +4,8 @@
  */
 
 import { server } from './stellar';
+import { canonicalAmount } from './stroop-amount.js';
+import { explorerSegmentFor, resolveStellarNetwork } from '@shared/network';
 import { toast } from 'sonner';
 
 export interface PaymentNotification {
@@ -151,7 +153,7 @@ class PaymentMonitor {
    * Show notification for received payment
    */
   private showNotification(payment: PaymentNotification) {
-    const amount = parseFloat(payment.amount).toFixed(2);
+    const amount = canonicalAmount(payment.amount) ?? payment.amount;
     
     // Play notification sound (optional)
     if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -177,7 +179,9 @@ class PaymentMonitor {
       action: {
         label: 'View',
         onClick: () => {
-          const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK === 'TESTNET' ? 'testnet' : 'public';
+          const network = explorerSegmentFor(
+            resolveStellarNetwork(process.env.NEXT_PUBLIC_STELLAR_NETWORK)
+          );
           window.open(`https://stellar.expert/explorer/${network}/tx/${payment.hash}`, '_blank');
         },
       },

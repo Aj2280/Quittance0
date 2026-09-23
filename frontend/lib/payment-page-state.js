@@ -36,8 +36,11 @@ const PAY_STATES = Object.freeze({
 const TERMINAL_STATES = Object.freeze([PAY_STATES.PAID, PAY_STATES.EXPIRED]);
 const { isTerminalPayState } = require('./pay-terminal-guard.ts');
 const { effectiveInvoiceStatus, hasInvoiceExpired } = require('./invoice-lifecycle');
-const { walletGate } = require('./freighter-availability');
-const { messageForCode } = require('./verification');
+const { walletSessionChanged, walletSessionGate } = require('./wallet-session');
+// The canonical code -> message table. describeVerifyError resolves the
+// backend's stable rejection code through it, so a payer reads the same
+// sentence here as on every other surface.
+const { messageForCode } = require('./verification.js');
 
 const asInvoice = (statusOrInvoice) =>
   statusOrInvoice && typeof statusOrInvoice === 'object'
@@ -83,7 +86,7 @@ function getPayPageWalletGate(invoice, session, expectedNetwork, now) {
     };
   }
 
-  return walletGate(session, expectedNetwork);
+  return walletSessionGate(session, expectedNetwork);
 }
 
 /** Maps an invoice status onto the state it forces, or null if it forces none. */
@@ -178,6 +181,10 @@ function paymentReducer(state, event) {
       if (isTerminalPayState(state.status)) return state;
       return { ...state, status: PAY_STATES.IDLE, error: null };
 
+    // A copy confirmation is feedback, not session state.
+    case 'COPIED':
+      return state;
+
     default:
       return state;
   }
@@ -193,6 +200,27 @@ function shouldPoll(state) {
   if (!state?.invoice) return false;
   if (isTerminalPayState(state.status)) return false;
   return effectiveInvoiceStatus(state.invoice) === 'PENDING';
+}
+
+/**
+ * Whether an in-flight pay or verify session must be dropped because the
+ * wallet underneath it changed (issue #508).
+ *
+ * An account switch or a disconnect invalidates the previous key's pending
+ * work: a verify started by wallet A may not complete its UI under wallet B,
+ * and a hash submitted during a Freighter prompt must not be attributed to a
+ * session that no longer owns it. A network-only change is already handled by
+ * the wallet gate and terminal states are never reset — a settled invoice
+ * stays settled no matter who is connected.
+ */
+function shouldDropPendingPayment(previousSession, nextSession, status) {
+  if (isTerminalPayState(status)) return false;
+  // Nothing was key-bound while disconnected, so a fresh connect drops
+  // nothing — the verify path carries no wallet identity.
+  if (!previousSession?.publicKey) return false;
+  const change = walletSessionChanged(previousSession, nextSession);
+  if (!change.changed) return false;
+  return change.accountChanged || change.connectionChanged;
 }
 
 /** Email shape accepted for payer metadata. Mirrors the backend's own check. */
@@ -331,6 +359,7 @@ module.exports = {
   initialPaymentState,
   paymentReducer,
   shouldPoll,
+  shouldDropPendingPayment,
   normalizePayerDetails,
   describeVerifyError,
   isLikelyTransactionHash,

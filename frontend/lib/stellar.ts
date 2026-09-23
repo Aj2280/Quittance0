@@ -4,6 +4,7 @@ import {
   isConnected,
   getPublicKey,
   signTransaction,
+  signBlob,
   isAllowed,
   setAllowed,
   getNetwork,
@@ -17,19 +18,31 @@ import {
   wrongNetworkMessage,
 } from './freighter-availability';
 import { networkDisplayName } from './network-display-name';
+import { fitsStellarTextMemo } from '@shared/memo';
+import {
+  defaultHorizonUrl,
+  passphraseFor,
+  resolveStellarNetwork,
+  walletNetworkMatches,
+} from '@shared/network';
+import { canonicalAmount } from './stroop-amount.js';
+import {
+  accountHasTrustline,
+  classifyTrustlinePreflight,
+  trustlinePreflightMessage,
+  type TrustlinePreflight,
+} from './trustline-preflight';
 
-// Network configuration
-export const STELLAR_NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'TESTNET';
+// Network configuration — one resolver for the whole app (issue #511):
+// NEXT_PUBLIC_STELLAR_NETWORK decides the passphrase Freighter must report,
+// the default Horizon URL, and the explorer segment links render. An
+// unrecognised value fails at load rather than silently picking a network.
+const RESOLVED_NETWORK = resolveStellarNetwork(process.env.NEXT_PUBLIC_STELLAR_NETWORK);
+export const STELLAR_NETWORK = RESOLVED_NETWORK;
 export const HORIZON_URL =
-  process.env.NEXT_PUBLIC_HORIZON_URL ||
-  (STELLAR_NETWORK === 'TESTNET'
-    ? 'https://horizon-testnet.stellar.org'
-    : 'https://horizon.stellar.org');
+  process.env.NEXT_PUBLIC_HORIZON_URL || defaultHorizonUrl(RESOLVED_NETWORK);
 
-export const NETWORK_PASSPHRASE =
-  STELLAR_NETWORK === 'TESTNET'
-    ? StellarSdk.Networks.TESTNET
-    : StellarSdk.Networks.PUBLIC;
+export const NETWORK_PASSPHRASE = passphraseFor(RESOLVED_NETWORK);
 
 export const NETWORK_DISPLAY_NAME = networkDisplayName(NETWORK_PASSPHRASE);
 export const EXPECTED_WALLET_NETWORK = STELLAR_NETWORK.toUpperCase();
@@ -47,19 +60,46 @@ export const getExplorerAccountUrl = (publicKey: string, walletNetwork = STELLAR
 };
 
 const getTrustlineMessage = (assetCode: string): string =>
-  `Your wallet does not have a ${assetCode} trustline on ${STELLAR_NETWORK.toLowerCase()}. Add the ${assetCode} trustline in Freighter, or ask the seller for an XLM invoice.`;
+  trustlinePreflightMessage('MISSING_TRUSTLINE', assetCode, STELLAR_NETWORK.toLowerCase());
 
 const hasAssetTrustline = (
   account: StellarSdk.Horizon.AccountResponse,
   assetCode: string,
   assetIssuer: string
-): boolean =>
-  account.balances.some(
-    (balance: any) =>
-      balance.asset_type !== 'native' &&
-      balance.asset_code === assetCode &&
-      balance.asset_issuer === assetIssuer
-  );
+): boolean => accountHasTrustline(account, assetCode, assetIssuer);
+
+/**
+ * Preflight for credit-asset payments (issue #506): resolve the payer's
+ * account before Freighter opens so a missing trustline blocks submit with an
+ * actionable message. Native XLM short-circuits; a Horizon outage is a
+ * retryable failure, never a silent pass.
+ */
+export const preflightAssetTrustline = async (
+  publicKey: string,
+  assetCode: string,
+  assetIssuer?: string
+): Promise<TrustlinePreflight> => {
+  const normalizedAssetCode = (assetCode || 'XLM').toUpperCase();
+  if (normalizedAssetCode === 'XLM') {
+    return { ok: true, code: 'NATIVE_ASSET' };
+  }
+
+  let account: StellarSdk.Horizon.AccountResponse | null = null;
+  let lookupError: unknown;
+  try {
+    account = await loadAccount(publicKey);
+  } catch (error) {
+    lookupError = error;
+  }
+
+  return classifyTrustlinePreflight({
+    assetCode: normalizedAssetCode,
+    assetIssuer,
+    account,
+    error: lookupError,
+    networkLabel: STELLAR_NETWORK.toLowerCase(),
+  });
+};
 
 const isMissingTrustlineError = (error: any): boolean => {
   const operationCodes = error?.response?.data?.extras?.result_codes?.operations;
@@ -221,55 +261,14 @@ export const assertFreighterReady = async (): Promise<FreighterSession> => {
   const session = await readFreighterSession();
   if (!session.freighterAvailable) throw new Error(FREIGHTER_REQUIRED_MESSAGE);
   if (!session.connected || !session.publicKey) throw new Error(FREIGHTER_CONNECT_REQUIRED_MESSAGE);
-  if (!networkMatches(session.network, EXPECTED_WALLET_NETWORK)) {
+  // Passphrase-first gate (issue #511): when Freighter reports the network
+  // passphrase it must equal the resolved one exactly — a custom network can
+  // call itself "TESTNET" but cannot forge the passphrase. Wallets that do
+  // not report a passphrase fall back to the name check.
+  if (!walletNetworkMatches(RESOLVED_NETWORK, session)) {
     throw new Error(wrongNetworkMessage(EXPECTED_WALLET_NETWORK, session.network));
   }
   return session;
-};
-
-/**
- * Query current network and passphrase from Freighter
- */
-export const getFreighterNetwork = async (): Promise<{
-  network: string;
-  networkPassphrase: string;
-  networkUrl?: string;
-} | null> => {
-  try {
-    const connected = await checkWalletConnection();
-    if (!connected) return null;
-
-    const [netResult, detailsResult] = await Promise.allSettled([
-      getNetwork(),
-      getNetworkDetails(),
-    ]);
-
-    const networkName = netResult.status === 'fulfilled' ? netResult.value : null;
-    const details = detailsResult.status === 'fulfilled' ? detailsResult.value : null;
-
-    const rawNetwork = networkName || details?.network || null;
-    let passphrase = details?.networkPassphrase || null;
-
-    if (!passphrase && rawNetwork) {
-      const upper = rawNetwork.toUpperCase();
-      if (upper === 'PUBLIC' || upper === 'MAINNET') {
-        passphrase = StellarSdk.Networks.PUBLIC;
-      } else if (upper === 'TESTNET') {
-        passphrase = StellarSdk.Networks.TESTNET;
-      }
-    }
-
-    if (!rawNetwork && !passphrase) return null;
-
-    return {
-      network: rawNetwork || (passphrase === StellarSdk.Networks.PUBLIC ? 'PUBLIC' : 'TESTNET'),
-      networkPassphrase: passphrase || (rawNetwork?.toUpperCase() === 'PUBLIC' ? StellarSdk.Networks.PUBLIC : StellarSdk.Networks.TESTNET),
-      networkUrl: details?.networkUrl,
-    };
-  } catch (error) {
-    console.error('Error getting Freighter network:', error);
-    return null;
-  }
 };
 
 /**
@@ -307,7 +306,13 @@ export const isWrongNetwork = (
  * Watch Freighter network changes on an interval
  */
 export const watchFreighterNetwork = (
-  callback: (details: { network: string; networkPassphrase: string; isWrongNetwork: boolean } | null) => void,
+  callback: (
+    details: {
+      network: string | null;
+      networkPassphrase: string | null;
+      isWrongNetwork: boolean;
+    } | null
+  ) => void,
   intervalMs = 2500
 ): (() => void) => {
   let active = true;
@@ -409,6 +414,13 @@ export const sendPayment = async (
       throw new Error(getTrustlineMessage(normalizedAssetCode));
     }
 
+    // Invoice memos are Stellar text memos: refuse before building if the
+    // memo cannot fit, so the failure is the contract's message rather than
+    // the SDK's opaque `Memo.text` throw.
+    if (!fitsStellarTextMemo(memo)) {
+      throw new Error('Invoice memo exceeds the 28-byte Stellar text memo limit');
+    }
+
     // Build transaction
     const transaction = new StellarSdk.TransactionBuilder(account, {
       fee: StellarSdk.BASE_FEE,
@@ -418,7 +430,9 @@ export const sendPayment = async (
         StellarSdk.Operation.payment({
           destination,
           asset,
-          amount,
+          // Canonical stroop string: the SDK rejects exponent notation like
+          // `1e-7`, and any float formatting risks a one-stroop drift.
+          amount: formatStellarAmount(amount),
         })
       )
       .addMemo(StellarSdk.Memo.text(memo))
@@ -507,10 +521,35 @@ export const streamPayments = (
 };
 
 /**
- * Format Stellar amount (remove trailing zeros)
+ * The one seller-proof message for cancel (issue #517): the connected wallet
+ * signs exactly `cancel:<invoiceId>` — one canonical message on one canonical
+ * transport (the request body), so a stale query param or header cannot
+ * smuggle a different seller key past the gate.
+ */
+export const CANCEL_INVOICE_MESSAGE_PREFIX = 'cancel:';
+
+export const signInvoiceCancelMessage = async (
+  invoiceId: string
+): Promise<{ publicKey: string; signature: string }> => {
+  const session = await assertFreighterReady();
+  const message = `${CANCEL_INVOICE_MESSAGE_PREFIX}${invoiceId}`;
+  // ASCII-only message, so btoa is a safe UTF-8→base64 step here.
+  const signed = await signBlob(btoa(message), { accountToSign: session.publicKey! });
+  const signature = readResultString(signed as any, ['signedBlob', 'signature']) ||
+    (typeof signed === 'string' ? signed : null);
+  if (!signature) {
+    throw new Error('Freighter did not return a cancel signature');
+  }
+  return { publicKey: session.publicKey!, signature };
+};
+
+/**
+ * Format a Stellar amount for operations and display. Routes through the
+ * stroop helpers so small amounts never surface as exponent strings like
+ * `1e-7`, which neither the SDK nor the SEP-0007 URI schema accepts.
  */
 export const formatStellarAmount = (amount: string | number): string => {
-  return parseFloat(amount.toString()).toString();
+  return canonicalAmount(amount) ?? amount.toString();
 };
 
 /**
@@ -539,6 +578,7 @@ const stellarService = {
   watchFreighterNetwork,
   loadAccount,
   getAccountBalance,
+  preflightAssetTrustline,
   sendPayment,
   getTransaction,
   checkTransactionStatus,
